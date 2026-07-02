@@ -1,0 +1,20 @@
+langchain
+langchain-core
+langchain-community
+langchain-openai
+langgraph
+
+docling
+celery
+redis
+pymupdf
+markitdown[all]
+langchain-cohere 
+cohere
+dotenv
+langchain-pinecone
+boto3
+langchain-google-genai
+langchain-community
+langchain-tavily
+# pinecone-text
