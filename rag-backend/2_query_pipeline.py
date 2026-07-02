@@ -10,7 +10,7 @@ def fetch_context_from_vector_db(query: str,tenantId: str,workspaceId: str,top_k
     embedding_pipeline = importlib.import_module("1_embedding_pipeline")
     get_vector_store = embedding_pipeline.get_vector_store
     from langchain_community.document_compressors import JinaRerank
-    from langchain.retrievers import ContextualCompressionRetriever
+    from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
     vc = get_vector_store()
     
     jina_api_key = os.getenv("JINA_API_KEY")
@@ -29,7 +29,7 @@ def fetch_context_from_vector_db(query: str,tenantId: str,workspaceId: str,top_k
         base_retriever=vc.as_retriever(search_kwargs={"tenantId": tenantId, "workspaceId": workspaceId, "top_k": top_k+8})
     )
     try: 
-        relevant_docs = compression_retriever.get_relevant_documents(query)    
+        relevant_docs = compression_retriever.invoke(query)    
     except Exception as e:
         print(f"Error fetching relevant documents: {e}")
         return ""

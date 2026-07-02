@@ -266,11 +266,10 @@ def generic_response_node(state: AgentState, config: RunnableConfig):
                                   You are a history-grounded assistant. Answer only from the conversation history.
 
                                 - If the user's query is generic (e.g., greetings, thanks, casual conversation), respond appropriately using the conversation context.
-                                - If the answer already exists in the conversation history, return the relevant answer.
-                                - If the answer cannot be found in the conversation history, do not guess, infer, or use external knowledge.
 
-                                Respond exactly with:
-                                doesnot have enough context/information to respond to the query.
+                                - If the answer already exists in the conversation history, return the relevant answer.
+
+                                - If the answer cannot be found in the conversation history, do not guess, infer, or use external knowledge.Respond that you donot have enough context/information to respond to the query
 
                                 Use the conversation history as the only source of truth.''')
     
