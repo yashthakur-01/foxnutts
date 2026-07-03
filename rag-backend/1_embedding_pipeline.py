@@ -95,18 +95,18 @@ def get_docs_from_file(key: str, chunk_size: int, chunk_overlap: int) -> list[Do
         
     return docs
 
-def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_overlap: int, userId: str, workspaceId: str) -> None:
+def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_overlap: int, customerId: str, workspaceId: str) -> None:
     
     print(f"Processing file: {file_name}")
     try: 
-        key = f"users/{userId}/{workspaceId}/{file_name}"
+        key = f"users/{customerId}/{workspaceId}/{file_name}"
         docs: list[Document] | None = get_docs_from_file(key, chunk_size, chunk_overlap)
         if docs is None:
             raise ValueError(f"No documents could be generated for file {file_name}.")
         
         for item in docs:
             item.metadata["fileName"] = file_name
-            item.metadata["tenantId"] = userId
+            item.metadata["customerId"] = customerId
             item.metadata["workspaceId"] = workspaceId
         
         store_docs(docs)
@@ -119,8 +119,8 @@ def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_overlap:
 if __name__ == "__main__":
     generate_embeddings_for_file(
         file_name="longwalk.pdf",
-        chunk_size=1024,
-        chunk_overlap=200,
-        userId="user1",
+        chunk_size=1000,
+        chunk_overlap=500,
+        customerId="user1",
         workspaceId="workspace1"
     )

@@ -1,3 +1,5 @@
+from google.ai.generativelanguage_v1beta.types import content
+from typing import Optional
 from langchain_core.runnables import configurable
 from ast import operator
 from langgraph.prebuilt import InjectedState
@@ -14,6 +16,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 import os
 import operator
 import time
+from helper.obseravable_node import observable_node
 
 
 
@@ -63,7 +66,9 @@ class ModelClass(TypedDict):
 
 class AgentState(TypedDict):
     system_prompt: str
-    
+
+    error_messages : Optional[Annotated[list[dict[str, str]],operator.add]]
+
     max_iter: int
     
     query: Annotated[list[str], operator.add]
@@ -78,7 +83,7 @@ class AgentState(TypedDict):
     
     disclaimer: bool
 
-    trajectory: Annotated[list[str], operator.add]
+    trajectory: Annotated[list[dict[str, str]], operator.add]
 
     retrived_context: Annotated[list[str], operator.add]
     
@@ -87,11 +92,15 @@ class AgentState(TypedDict):
 class ConditionalRouterOutput(TypedDict):   
     route: Literal["generic_or_repetitive", "genuine_query","satisfactory", "unsatisfactory", "revise", "query_rephrase", "clarify"]
 
+
+@observable_node("genuine_generic_router")
 def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     """
     this is a conditional router that returns the response as generic_or_repetitive or genuine_query on 
     the basis of the query and chat history
     """
+    state['trajectory']
+
     messages = state["messages"]
     provider = state["model"]["provider"]
     model_name = state["model"]["model_name"]
@@ -122,10 +131,10 @@ def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     
     time.sleep(2.5)
     response = llm.invoke(full_messages)
-    
-    return {"route": [response["route"]], "trajectory": ["conditional_node"]}
 
+    return {"route": [response["route"]], "trajectory": [{"node_output": response}]}
 
+@observable_node("context_retriver")
 def retrieve_context(state:AgentState, config: RunnableConfig):
 
     import importlib
@@ -133,18 +142,13 @@ def retrieve_context(state:AgentState, config: RunnableConfig):
     fetch_context_from_vector_db = query_pipeline.fetch_context_from_vector_db
     query=state["query"][-1]
     configurable = config.get("configurable", {})
-    tenantId=configurable.get("tenantId", "")
-    workspaceId=configurable.get("workspaceId", "")
+    customerId = configurable.get("customerId", "")
+    tenantId = configurable.get("tenantId", "")  # Retained for analytics/tracing
+    workspaceId = configurable.get("workspaceId", "")
     
-    try: 
-        context = fetch_context_from_vector_db(query, tenantId, workspaceId)
-    except Exception as e:
-        context = "error occured fetching the context from the vector database"
-        print(f"Error fetching context from vector DB: {e}")
-    return {"retrived_context": [context], "trajectory": ["retrieve_context"]}
+    context = fetch_context_from_vector_db(query, customerId, workspaceId)
+    return {"retrived_context": [context], "trajectory": [{"output":context}]}
 
-    
-    
 @tool
 def web_search(state: Annotated[dict, InjectedState]) -> str:
     """Use this tool to search Google for up-to-date real-time information.
@@ -198,7 +202,7 @@ def web_search(state: Annotated[dict, InjectedState]) -> str:
    
 
 def route_after_chatbot(
-    state: AgentState,
+    state: AgentState, config: RunnableConfig
 ) -> Literal["tools", "response_evaluation_node"]:
     
     last_message = state["messages"][-1]
@@ -211,7 +215,7 @@ def route_after_chatbot(
 
     return "response_evaluation_node"       
 
-
+@observable_node("chatbot_node")
 def chatbot_node(state: AgentState, config: RunnableConfig):
     """
     Dynamically initializes the selected LLM provider, applies system prompts,
@@ -252,9 +256,9 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = base_model.invoke(messages)
     
-    return {"messages": [response]}
+    return {"messages": [response],"trajectory": [{"output": response}]}
 
-
+@observable_node("generic_response_node")
 def generic_response_node(state: AgentState, config: RunnableConfig):
     '''
     a simple node that analyses the current conversation. If the query is generic
@@ -283,9 +287,9 @@ def generic_response_node(state: AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = llm_model.invoke(full_messages)
     
-    return {"messages": [response]}
+    return {"messages": [response], "trajectory": [{"output":response}]}
     
-    
+@observable_node("evalator_node")   
 def response_evaluation_node(state:AgentState, config: RunnableConfig):
     max_iter = state.get("max_iter", 0)
     if max_iter >= 2:
@@ -345,15 +349,15 @@ def response_evaluation_node(state:AgentState, config: RunnableConfig):
     response = llm.invoke(full_messages)
 
     if response.content.strip().lower() == "satisfactory":
-        return {"route": ["satisfactory"], "max_iter": max_iter + 1, "trajectory": ["response_evaluation_node"]}
+        return {"route": ["satisfactory"], "max_iter": max_iter + 1, "trajectory": [{"output": response}]}
     elif response.content.strip().lower().startswith("query_rephrase"):
-        return {"route": ["query_rephrase"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": ["response_evaluation_node"]}
+        return {"route": ["query_rephrase"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": [{"output": response}]}
     elif response.content.strip().lower().startswith("clarify"):
-        return {"route": ["clarify"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": ["response_evaluation_node"]}
+        return {"route": ["clarify"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": [{"output": response}]}
     else:
-        return {"route": ["revise"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": ["response_evaluation_node"]}
+        return {"route": ["revise"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": [{"output": response}]}
 
-
+@observable_node("query_rephraser_node")
 def query_rephraser_node(state:AgentState, config: RunnableConfig):
     """
     This node rephrases the user query if the response generated is not satisfactory. It takes the original query and the conversation history as input and rephrases the query in a way that it can be answered effectively by the LLM. The rephrased query is then sent back to the conditional router node 1 for re-evaluation.
@@ -387,18 +391,19 @@ def query_rephraser_node(state:AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = llm.invoke(full_messages)
     
-    return {"query": [response.content.strip()], "messages": [HumanMessage(content=response.content.strip())], "trajectory": ["query_rephraser_node"]}
+    return {"query": [response.content.strip()], "messages": [HumanMessage(content=response.content.strip())], "trajectory": [{"output": response}]}
 
-
+@observable_node("unsatisfactory_handle_node")
 def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
     """
     this node is to return the most recent response of the agent with a disclaimer that the max_iteration of the agent has been reached, and the response may not be satisfactory.
     """
     last_response = state["messages"][-1].content
     disclaimer = "Disclaimer: The maximum number of iterations has been reached. The following response may not be satisfactory.\n\n"
-    return {"disclaimer": True,"messages": [AIMessage(content=disclaimer + last_response)], "trajectory": ["unsatisfactory_handler_node"]}
+    response = AIMessage(content=disclaimer + last_response)
+    return {"disclaimer": True,"messages": [response], "trajectory": [{"output": response}]}
 
-
+@observable_node("clarify_node")
 def clarify_node(state: AgentState, config: RunnableConfig):
     """
     This node asks the user for clarification if the query is too ambiguous to answer or retrieve context for.
@@ -429,7 +434,7 @@ def clarify_node(state: AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = llm.invoke(full_messages)
     
-    return {"messages": [response], "trajectory": ["clarify_node"]}
+    return {"messages": [response], "trajectory": [{"output": response}]}
 
 
 def return_response(state: AgentState, config: RunnableConfig) -> str:
@@ -448,40 +453,40 @@ def get_chatbot_agent():
         print("🚀 Initializing and Compiling LangGraph Chatbot Engine...")
         
         graph_builder = StateGraph(AgentState)
-        graph_builder.add_node("conditional_node", conditional_router_node_1)
-        graph_builder.add_node("retrieve_context",retrieve_context)
+        graph_builder.add_node("genuine_generic_router", conditional_router_node_1)
+        graph_builder.add_node("context_retriver", retrieve_context)
         graph_builder.add_node("query_rephraser_node", query_rephraser_node)
-        graph_builder.add_node("main_chatbot", chatbot_node)
+        graph_builder.add_node("chatbot_node", chatbot_node)
         graph_builder.add_node("generic_response_node", generic_response_node)
-        graph_builder.add_node("response_evaluation_node", response_evaluation_node)
-        graph_builder.add_node("unsatisfactory_handler_node", unsatisfactory_handler_node)
+        graph_builder.add_node("evalator_node", response_evaluation_node)
+        graph_builder.add_node("unsatisfactory_handle_node", unsatisfactory_handler_node)
         graph_builder.add_node("clarify_node", clarify_node)
         graph_builder.add_node("tools",ToolNode(tools=[web_search]))
         
         
-        graph_builder.add_edge(START, "conditional_node")
-        graph_builder.add_conditional_edges("conditional_node", return_response,
+        graph_builder.add_edge(START, "genuine_generic_router")
+        graph_builder.add_conditional_edges("genuine_generic_router", return_response,
                                            {
                                                "generic_or_repetitive": "generic_response_node",
-                                               "genuine_query": "retrieve_context"
+                                               "genuine_query": "context_retriver"
                                            })
-        graph_builder.add_edge("retrieve_context","main_chatbot")
+        graph_builder.add_edge("context_retriver","chatbot_node")
         graph_builder.add_edge("generic_response_node", END)
-        graph_builder.add_conditional_edges("main_chatbot", route_after_chatbot,{
+        graph_builder.add_conditional_edges("chatbot_node", route_after_chatbot,{
                                                     "tools": "tools",
-                                                    "response_evaluation_node": "response_evaluation_node"
+                                                    "response_evaluation_node": "evalator_node"
                                                 }
         )
-        graph_builder.add_edge("tools", "main_chatbot")
-        graph_builder.add_conditional_edges("response_evaluation_node", return_response,{
+        graph_builder.add_edge("tools", "chatbot_node")
+        graph_builder.add_conditional_edges("evalator_node", return_response,{
                                                   "satisfactory": END,
-                                                  "unsatisfactory":  "unsatisfactory_handler_node",
+                                                  "unsatisfactory":  "unsatisfactory_handle_node",
                                                   "query_rephrase": "query_rephraser_node",
-                                                  "revise":"main_chatbot",
+                                                  "revise":"chatbot_node",
                                                   "clarify": "clarify_node"
                                              })
-        graph_builder.add_edge("query_rephraser_node", "retrieve_context")
-        graph_builder.add_edge("unsatisfactory_handler_node", END)        
+        graph_builder.add_edge("query_rephraser_node", "context_retriver")
+        graph_builder.add_edge("unsatisfactory_handle_node", END)        
         graph_builder.add_edge("clarify_node", END) 
         _compiled_graph_instance=graph_builder       
         
