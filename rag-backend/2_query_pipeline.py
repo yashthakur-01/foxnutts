@@ -1,6 +1,5 @@
 from typing import Literal
 from dotenv import load_dotenv
-# from langchain_core.retrievers HybridRetrivers
 import os
 
 load_dotenv()
@@ -11,8 +10,11 @@ def fetch_context_from_vector_db(query: str, customerId: str, workspaceId: str, 
     get_vector_store = embedding_pipeline.get_vector_store
     from langchain_community.document_compressors import JinaRerank
     from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
-    vc = get_vector_store()
     
+    vc_retriever = get_vector_store(
+        top_k=top_k + 8, 
+        filter={"customerId": customerId, "workspaceId": workspaceId}
+    )
     jina_api_key = os.getenv("JINA_API_KEY")
     if not jina_api_key:
         raise ValueError("JINA_API_KEY environment variable is not set.")
@@ -26,7 +28,7 @@ def fetch_context_from_vector_db(query: str, customerId: str, workspaceId: str, 
     # Wrap your existing vector database retriever
     compression_retriever = ContextualCompressionRetriever(
         base_compressor=reranker, 
-        base_retriever=vc.as_retriever(search_kwargs={"customerId": customerId, "workspaceId": workspaceId, "top_k": top_k+8})
+        base_retriever=vc_retriever
     )
     try: 
         relevant_docs = compression_retriever.invoke(query)    

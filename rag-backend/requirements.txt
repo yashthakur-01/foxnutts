@@ -17,6 +17,6 @@ boto3
 langchain-google-genai
 langchain-community
 langchain-tavily
-# pinecone-text
+pinecone-text
 
 pinecone

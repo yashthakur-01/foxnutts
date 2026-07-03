@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from markitdown import MarkItDown
 
 md = MarkItDown()

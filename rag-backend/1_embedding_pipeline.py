@@ -3,11 +3,24 @@ from dotenv import load_dotenv
 from langchain_cohere import CohereEmbeddings
 from langchain_core.documents import Document
 import boto3
+from typing import Any
+from langchain_community.retrievers import PineconeHybridSearchRetriever
+
+class CustomPineconeHybridSearchRetriever(PineconeHybridSearchRetriever):
+    filter_dict: dict = None
+    
+    def _get_relevant_documents(self, query: str, *, run_manager, **kwargs: Any):
+        if self.filter_dict:
+            kwargs["filter"] = self.filter_dict
+        return super()._get_relevant_documents(query, run_manager=run_manager, **kwargs)
+
 # pyrefly: ignore [missing-import]
-from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
 import time
 import os
 from main import main
+# pyrefly: ignore [missing-import]
+from pinecone_text.sparse import BM25Encoder
 
 load_dotenv()
 
@@ -18,16 +31,23 @@ def get_embedding_model():
         raise ValueError("Cohere API key or Cohere model name not found in environment variables.")
     return CohereEmbeddings(cohere_api_key=cohere_api, model=cohere_model)
 
-def get_vector_store():
+def get_vector_store(top_k: int = 5, filter: dict = None):
     pinecone_api = os.environ.get("PINECONE_API_KEY")
-    index = os.environ.get("PINECONE_INDEX")
-    if(not pinecone_api or not index):
+    index_name = os.environ.get("PINECONE_INDEX")
+    if(not pinecone_api or not index_name):
         raise ValueError("Pinecone API key or index not found in environment variables.")
     try: 
         embedding = get_embedding_model() 
+        # Initialize with default BM25 weights (vital for it to work)
+        encoder = BM25Encoder().default()
+        
+        # The hybrid retriever expects an actual Pinecone Index object, not just the string name
+        pc = Pinecone(api_key=pinecone_api)
+        index = pc.Index(index_name)
     except Exception as e:
-        raise ValueError(f"Error occurred while initializing PineconeVectorStore: {e}")
-    return PineconeVectorStore.from_existing_index(embedding=embedding, index_name=index)
+        raise ValueError(f"Error occurred while initializing PineconeHybridSearchRetriever: {e}")
+        
+    return CustomPineconeHybridSearchRetriever(embeddings=embedding, sparse_encoder=encoder, index=index, top_k=top_k, filter_dict=filter)
 
 
 def store_docs(docs: list[Document])-> None:
@@ -38,10 +58,14 @@ def store_docs(docs: list[Document])-> None:
         
         batch = docs[i:i+batch_size]
         
+        # Hybrid Retriever expects raw strings and dicts, not LangChain Document objects
+        texts = [doc.page_content for doc in batch]
+        metadatas = [doc.metadata for doc in batch]
+        
         print(f"\n--- Processing Batch {i // batch_size + 1} ---")
         print(f"Uploading documents {i} to {i + len(batch)}...")
         try:
-            vc.add_documents(batch)
+            vc.add_texts(texts=texts, metadatas=metadatas)
             print(f"Batch {i // batch_size + 1} uploaded successfully.")
         except Exception as e:
             print(f"Error occurred while uploading batch {i // batch_size + 1}: {e}")
@@ -49,7 +73,7 @@ def store_docs(docs: list[Document])-> None:
             time.sleep(30)
             
             try:
-                vc.add_documents(batch)
+                vc.add_texts(texts=texts, metadatas=metadatas)
                 print(f"Batch {i // batch_size + 1} uploaded successfully.")
             except Exception as e:
                 print(f"Error occurred while uploading batch {i // batch_size + 1}: {e}")
@@ -118,7 +142,7 @@ def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_overlap:
 
 if __name__ == "__main__":
     generate_embeddings_for_file(
-        file_name="longwalk.pdf",
+        file_name="lettertogod.pdf",
         chunk_size=1000,
         chunk_overlap=500,
         customerId="user1",

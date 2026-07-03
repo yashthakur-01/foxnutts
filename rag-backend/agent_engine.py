@@ -1,4 +1,3 @@
-from google.ai.generativelanguage_v1beta.types import content
 from typing import Optional
 from langchain_core.runnables import configurable
 from ast import operator
@@ -8,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from typing import Literal,TypedDict, Annotated
+from typing import Literal,TypedDict, Annotated, Any
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
@@ -85,6 +84,8 @@ class AgentState(TypedDict):
 
     trajectory: Annotated[list[dict[str, str]], operator.add]
 
+    current_context : str | None
+
     retrived_context: Annotated[list[str], operator.add]
     
     route: Annotated[list[str],operator.add]
@@ -108,9 +109,9 @@ def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     max_tokens = state["model"]["max_tokens"]
     llm = get_model_instance(provider, model_name, temperature, max_tokens)
     if provider=='groq':
-        llm = llm.with_structured_output(ConditionalRouterOutput, method="function_calling")
+        llm = llm.with_structured_output(ConditionalRouterOutput, method="function_calling", include_raw=True)
     else:
-        llm = llm.with_structured_output(ConditionalRouterOutput)
+        llm = llm.with_structured_output(ConditionalRouterOutput, include_raw=True)
 
     
     system_prompt = SystemMessage(content='''You are a query classifier. Use the user's latest query and the conversation history.
@@ -119,9 +120,18 @@ def conditional_router_node_1(state: AgentState,config: RunnableConfig):
 
         Return 'genuine_query' if the query is specific, introduces a new information need, or would benefit from retrieval.
 
-        when the query explicitly specifies that it wants the answer to be regenerated, or is unhappy with the current answer, classify it as 'genuine_query' to trigger a new response generation.
+        When the query explicitly specifies that it wants the answer to be regenerated, or is unhappy with the current answer, classify it as 'genuine_query' to trigger a new response generation.
         
         When uncertain, return 'genuine_query'.
+
+        Examples:
+        User: "hello" -> generic_or_repetitive
+        User: "how are you?" -> generic_or_repetitive
+        User: "thanks!" -> generic_or_repetitive
+        User: "whats your name?" -> generic_or_repetitive
+        User: "what are the features of product X?" -> genuine_query
+        User: "how do I reset my password?" -> genuine_query
+        User: "regenerate that answer" -> genuine_query
 
         Output exactly one of:
         generic_or_repetitive
@@ -132,7 +142,10 @@ def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     time.sleep(2.5)
     response = llm.invoke(full_messages)
 
-    return {"route": [response["route"]], "trajectory": [{"node_output": response}]}
+    parsed_output = response["parsed"]
+    raw_message = response["raw"]
+
+    return {"route": [parsed_output["route"]], "current_context": None, "node_output": [raw_message]}
 
 @observable_node("context_retriver")
 def retrieve_context(state:AgentState, config: RunnableConfig):
@@ -147,7 +160,7 @@ def retrieve_context(state:AgentState, config: RunnableConfig):
     workspaceId = configurable.get("workspaceId", "")
     
     context = fetch_context_from_vector_db(query, customerId, workspaceId)
-    return {"retrived_context": [context], "trajectory": [{"output":context}]}
+    return {"retrived_context": [context],"current_context": context, "node_output": [context]}
 
 @tool
 def web_search(state: Annotated[dict, InjectedState]) -> str:
@@ -234,7 +247,9 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
     if search_enabled:
         base_model = base_model.bind_tools([web_search])
 
-        
+    retrieved_context = state.get("current_context",None)
+    if not retrieved_context:
+        retrieved_context = state.get("messages",[{"content": "SYSTEM OBSERVATION: unable to fetch the context"}])[-1].content
     messages = [SystemMessage(content=f"""
                               {system_prompt}
                               you need to answer the query only on the basis of the retrived context. Donot make anything from your self.
@@ -250,13 +265,13 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
                                 {state.get('remarks', "no remarks")}
 
                                 context: 
-                                {state.get("retrived_context", ["No context fetched"])[-1]}
+                                {retrieved_context}
                               """),*state["messages"][-5:]]
 
     time.sleep(2.5)
     response = base_model.invoke(messages)
     
-    return {"messages": [response],"trajectory": [{"output": response}]}
+    return {"messages": [response], "node_output": [response]}
 
 @observable_node("generic_response_node")
 def generic_response_node(state: AgentState, config: RunnableConfig):
@@ -287,18 +302,21 @@ def generic_response_node(state: AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = llm_model.invoke(full_messages)
     
-    return {"messages": [response], "trajectory": [{"output":response}]}
+    return {"messages": [response], "node_output": [response]}
     
 @observable_node("evalator_node")   
 def response_evaluation_node(state:AgentState, config: RunnableConfig):
     max_iter = state.get("max_iter", 0)
     if max_iter >= 2:
-        return {"route": ["unsatisfactory"], "trajectory": ["response_evaluation_node"]}
+        return {"route": ["unsatisfactory"], "node_output": [{"reason": "max_iter reached"}]}
     
     # Extract just the specific text the judge needs
     original_query = state["query"][0]
     latest_query = state["query"][-1]
     drafted_response = state["messages"][-1].content
+    retrieved_context = state.get("current_context",None)
+    if not retrieved_context:
+        retrieved_context = state.get("messages",[{"content": "SYSTEM OBSERVATION: unable to fetch the context"}])[-1].content
     
     system_prompt = SystemMessage(
             content=f"""
@@ -311,7 +329,7 @@ def response_evaluation_node(state:AgentState, config: RunnableConfig):
         {latest_query}
 
         Context provided to the Assistant:
-        {state.get('retrived_context', ['No context fetched'])[-1]}
+        {retrieved_context}
 
         Assistant Response:
         {drafted_response}
@@ -349,13 +367,13 @@ def response_evaluation_node(state:AgentState, config: RunnableConfig):
     response = llm.invoke(full_messages)
 
     if response.content.strip().lower() == "satisfactory":
-        return {"route": ["satisfactory"], "max_iter": max_iter + 1, "trajectory": [{"output": response}]}
+        return {"route": ["satisfactory"], "max_iter": max_iter + 1, "node_output": [response]}
     elif response.content.strip().lower().startswith("query_rephrase"):
-        return {"route": ["query_rephrase"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": [{"output": response}]}
+        return {"route": ["query_rephrase"], "max_iter": max_iter + 1, "remarks": response.content, "node_output": [response]}
     elif response.content.strip().lower().startswith("clarify"):
-        return {"route": ["clarify"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": [{"output": response}]}
+        return {"route": ["clarify"], "max_iter": max_iter + 1, "remarks": response.content, "node_output": [response]}
     else:
-        return {"route": ["revise"], "max_iter": max_iter + 1, "remarks": response.content, "trajectory": [{"output": response}]}
+        return {"route": ["revise"], "max_iter": max_iter + 1, "remarks": response.content, "node_output": [response]}
 
 @observable_node("query_rephraser_node")
 def query_rephraser_node(state:AgentState, config: RunnableConfig):
@@ -391,7 +409,7 @@ def query_rephraser_node(state:AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = llm.invoke(full_messages)
     
-    return {"query": [response.content.strip()], "messages": [HumanMessage(content=response.content.strip())], "trajectory": [{"output": response}]}
+    return {"query": [response.content.strip()],"current_context": None, "messages": [HumanMessage(content=response.content.strip())], "node_output": [response]}
 
 @observable_node("unsatisfactory_handle_node")
 def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
@@ -401,7 +419,7 @@ def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
     last_response = state["messages"][-1].content
     disclaimer = "Disclaimer: The maximum number of iterations has been reached. The following response may not be satisfactory.\n\n"
     response = AIMessage(content=disclaimer + last_response)
-    return {"disclaimer": True,"messages": [response], "trajectory": [{"output": response}]}
+    return {"disclaimer": True,"messages": [response], "node_output": [response]}
 
 @observable_node("clarify_node")
 def clarify_node(state: AgentState, config: RunnableConfig):
@@ -434,8 +452,19 @@ def clarify_node(state: AgentState, config: RunnableConfig):
     time.sleep(2.5)
     response = llm.invoke(full_messages)
     
-    return {"messages": [response], "trajectory": [{"output": response}]}
+    return {"messages": [response], "node_output": [response]}
 
+
+@observable_node("start_node")
+def start_node(state: AgentState, config: RunnableConfig):
+    # Pass-through node to log the start state in trajectory
+    return {}
+
+
+@observable_node("start_node")
+def start_node(state: AgentState, config: RunnableConfig):
+    # Pass-through node to log the initial state in trajectory
+    return {}
 
 def return_response(state: AgentState, config: RunnableConfig) -> str:
     return state["route"][-1]
@@ -450,9 +479,10 @@ def get_chatbot_agent():
     global _compiled_graph_instance
     
     if _compiled_graph_instance is None:
-        print("🚀 Initializing and Compiling LangGraph Chatbot Engine...")
+        print("Initializing and Compiling LangGraph Chatbot Engine...")
         
         graph_builder = StateGraph(AgentState)
+        graph_builder.add_node("start_node", start_node)
         graph_builder.add_node("genuine_generic_router", conditional_router_node_1)
         graph_builder.add_node("context_retriver", retrieve_context)
         graph_builder.add_node("query_rephraser_node", query_rephraser_node)
@@ -464,7 +494,8 @@ def get_chatbot_agent():
         graph_builder.add_node("tools",ToolNode(tools=[web_search]))
         
         
-        graph_builder.add_edge(START, "genuine_generic_router")
+        graph_builder.add_edge(START, "start_node")
+        graph_builder.add_edge("start_node", "genuine_generic_router")
         graph_builder.add_conditional_edges("genuine_generic_router", return_response,
                                            {
                                                "generic_or_repetitive": "generic_response_node",
