@@ -1,0 +1,113 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Virtual Environment
+# =========================
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Testing
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Temporary Files
+# =========================
+*.tmp
+*.temp
+
+# =========================
+# SQLite
+# =========================
+*.db
+*.sqlite3
+
+# =========================
+# LangGraph / LangSmith
+# =========================
+.langgraph_api/
+.langsmith/
+
+# =========================
+# Vector Databases
+# =========================
+chroma/
+chroma_db/
+persist/
+faiss_index/
+vectorstore/
+
+# =========================
+# Uploaded Files
+# =========================
+uploads/
+data/
+documents/
+
+# =========================
+# Generated PDFs
+# =========================
+*.pdf
+
+# Uncomment if you want to ignore ALL PDFs
+# If your project contains sample PDFs you want to commit,
+# remove this section.
+
+# =========================
+# Cache
+# =========================
+.cache/
+
+.*json
+
+/temp/*

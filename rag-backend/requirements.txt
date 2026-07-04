@@ -4,7 +4,7 @@ langchain-community
 langchain-openai
 langgraph
 
-docling
+# docling
 celery
 redis
 pymupdf
