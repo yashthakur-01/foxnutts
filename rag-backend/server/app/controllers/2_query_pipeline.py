@@ -4,7 +4,7 @@ import os
 
 load_dotenv()
 
-def fetch_context_from_vector_db(query: str, customerId: str, workspaceId: str, top_k: int = 5, similarity_threshold: float = 0.6) -> str:
+async def fetch_context_from_vector_db(query: str, customerId: str, workspaceId: str, top_k: int = 5, similarity_threshold: float = 0.6) -> str:
     import importlib
     embedding_pipeline = importlib.import_module("1_embedding_pipeline")
     get_vector_store = embedding_pipeline.get_vector_store
@@ -31,7 +31,7 @@ def fetch_context_from_vector_db(query: str, customerId: str, workspaceId: str, 
         base_retriever=vc_retriever
     )
     try: 
-        relevant_docs = compression_retriever.invoke(query)    
+        relevant_docs = await compression_retriever.ainvoke(query)    
     except Exception as e:
         print(f"Error fetching relevant documents: {e}")
         return ""

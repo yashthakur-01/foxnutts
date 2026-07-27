@@ -15,6 +15,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 import os
 import operator
 import time
+import asyncio
 from helper.obseravable_node import observable_node
 
 
@@ -95,7 +96,7 @@ class ConditionalRouterOutput(TypedDict):
 
 
 @observable_node("genuine_generic_router")
-def conditional_router_node_1(state: AgentState,config: RunnableConfig):
+async def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     """
     this is a conditional router that returns the response as generic_or_repetitive or genuine_query on 
     the basis of the query and chat history
@@ -139,8 +140,8 @@ def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     
     full_messages = [system_prompt] + messages
     
-    time.sleep(2.5)
-    response = llm.invoke(full_messages)
+    await asyncio.sleep(2.5)
+    response = await llm.ainvoke(full_messages)
 
     parsed_output = response["parsed"]
     raw_message = response["raw"]
@@ -148,7 +149,7 @@ def conditional_router_node_1(state: AgentState,config: RunnableConfig):
     return {"route": [parsed_output["route"]], "current_context": None, "node_output": [raw_message]}
 
 @observable_node("context_retriver")
-def retrieve_context(state:AgentState, config: RunnableConfig):
+async def retrieve_context(state:AgentState, config: RunnableConfig):
 
     import importlib
     query_pipeline = importlib.import_module("2_query_pipeline")
@@ -159,11 +160,11 @@ def retrieve_context(state:AgentState, config: RunnableConfig):
     tenantId = configurable.get("tenantId", "")  # Retained for analytics/tracing
     workspaceId = configurable.get("workspaceId", "")
     
-    context = fetch_context_from_vector_db(query, customerId, workspaceId)
+    context = await fetch_context_from_vector_db(query, customerId, workspaceId)
     return {"retrived_context": [context],"current_context": context, "node_output": [context]}
 
 @tool
-def web_search(state: Annotated[dict, InjectedState]) -> str:
+async def web_search(state: Annotated[dict, InjectedState]) -> str:
     """Use this tool to search Google for up-to-date real-time information.
     
     parameters: (query: str): The search query string.
@@ -175,7 +176,7 @@ def web_search(state: Annotated[dict, InjectedState]) -> str:
     query = state['query'][-1]
     tavily_engine = TavilySearchResults(max_results=3)
     try:
-        results = tavily_engine.invoke({"query": query})
+        results = await tavily_engine.ainvoke({"query": query})
         
         formatted_results = []
         for doc in results:
@@ -229,7 +230,7 @@ def route_after_chatbot(
     return "response_evaluation_node"       
 
 @observable_node("chatbot_node")
-def chatbot_node(state: AgentState, config: RunnableConfig):
+async def chatbot_node(state: AgentState, config: RunnableConfig):
     """
     Dynamically initializes the selected LLM provider, applies system prompts,
     and binds tools entirely based on runtime configuration passed by the backend.
@@ -268,13 +269,13 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
                                 {retrieved_context}
                               """),*state["messages"][-5:]]
 
-    time.sleep(2.5)
-    response = base_model.invoke(messages)
+    await asyncio.sleep(2.5)
+    response = await base_model.ainvoke(messages)
     
     return {"messages": [response], "node_output": [response]}
 
 @observable_node("generic_response_node")
-def generic_response_node(state: AgentState, config: RunnableConfig):
+async def generic_response_node(state: AgentState, config: RunnableConfig):
     '''
     a simple node that analyses the current conversation. If the query is generic
     or the question is repetitive, whose answer is already been fetched and exists in the conversation history, then it 
@@ -299,13 +300,13 @@ def generic_response_node(state: AgentState, config: RunnableConfig):
     
     llm_model = get_model_instance(model_provider, model_name, temperature, max_tokens)
     full_messages = [system_prompt] + state["messages"]
-    time.sleep(2.5)
-    response = llm_model.invoke(full_messages)
+    await asyncio.sleep(2.5)
+    response = await llm_model.ainvoke(full_messages)
     
     return {"messages": [response], "node_output": [response]}
     
 @observable_node("evalator_node")   
-def response_evaluation_node(state:AgentState, config: RunnableConfig):
+async def response_evaluation_node(state:AgentState, config: RunnableConfig):
     max_iter = state.get("max_iter", 0)
     if max_iter >= 2:
         return {"route": ["unsatisfactory"], "node_output": [{"reason": "max_iter reached"}]}
@@ -363,8 +364,8 @@ def response_evaluation_node(state:AgentState, config: RunnableConfig):
     # ONLY pass the system prompt. We don't need the whole chat history!
     full_messages = [system_prompt] 
     
-    time.sleep(2.5)
-    response = llm.invoke(full_messages)
+    await asyncio.sleep(2.5)
+    response = await llm.ainvoke(full_messages)
 
     if response.content.strip().lower() == "satisfactory":
         return {"route": ["satisfactory"], "max_iter": max_iter + 1, "node_output": [response]}
@@ -376,7 +377,7 @@ def response_evaluation_node(state:AgentState, config: RunnableConfig):
         return {"route": ["revise"], "max_iter": max_iter + 1, "remarks": response.content, "node_output": [response]}
 
 @observable_node("query_rephraser_node")
-def query_rephraser_node(state:AgentState, config: RunnableConfig):
+async def query_rephraser_node(state:AgentState, config: RunnableConfig):
     """
     This node rephrases the user query if the response generated is not satisfactory. It takes the original query and the conversation history as input and rephrases the query in a way that it can be answered effectively by the LLM. The rephrased query is then sent back to the conditional router node 1 for re-evaluation.
     """
@@ -406,13 +407,13 @@ def query_rephraser_node(state:AgentState, config: RunnableConfig):
     
     full_messages = [system_prompt] + state["messages"]
     
-    time.sleep(2.5)
-    response = llm.invoke(full_messages)
+    await asyncio.sleep(2.5)
+    response = await llm.ainvoke(full_messages)
     
     return {"query": [response.content.strip()],"current_context": None, "messages": [HumanMessage(content=response.content.strip())], "node_output": [response]}
 
 @observable_node("unsatisfactory_handle_node")
-def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
+async def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
     """
     this node is to return the most recent response of the agent with a disclaimer that the max_iteration of the agent has been reached, and the response may not be satisfactory.
     """
@@ -422,7 +423,7 @@ def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
     return {"disclaimer": True,"messages": [response], "node_output": [response]}
 
 @observable_node("clarify_node")
-def clarify_node(state: AgentState, config: RunnableConfig):
+async def clarify_node(state: AgentState, config: RunnableConfig):
     """
     This node asks the user for clarification if the query is too ambiguous to answer or retrieve context for.
     """
@@ -449,14 +450,14 @@ def clarify_node(state: AgentState, config: RunnableConfig):
     
     full_messages = [system_prompt]
     
-    time.sleep(2.5)
-    response = llm.invoke(full_messages)
+    await asyncio.sleep(2.5)
+    response = await llm.ainvoke(full_messages)
     
     return {"messages": [response], "node_output": [response]}
 
 
 @observable_node("start_node")
-def start_node(state: AgentState, config: RunnableConfig):
+async def start_node(state: AgentState, config: RunnableConfig):
     # Pass-through node to log the start state in trajectory
     return {}
 
