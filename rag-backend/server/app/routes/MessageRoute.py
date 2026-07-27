@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from server.supabase.client import supabase
@@ -82,18 +82,71 @@ async def return_message(body: MessageRequest):
         
         print(f"Invoking LangGraph Agent for message: {body.message}")
         
-        # 6. Invoke the graph
-        final_state = await agent.ainvoke(initial_state, config)
-        
-        # 7. Extract the AI's final response
-        ai_response_text = final_state["messages"][-1].content
-        
-        print("Agent responded successfully.")
-        
-        return JSONResponse(
-            status_code=200,
-            content={"message": ai_response_text, "success": True}
-        )
+        # 6. Stream the graph and store the final response
+        async def generate_response():
+            full_response = ""
+            trajectory = []
+            error_messages = []
+            
+            try:
+                async for event in agent.astream_events(initial_state, config, version="v2"):
+                    if event["event"] == "on_chat_model_stream":
+                        chunk = event["data"]["chunk"].content
+                        if chunk:
+                            full_response += chunk
+                            yield chunk
+                            
+                    elif event["event"] == "on_chain_end":
+                        output = event["data"].get("output")
+                        # The final graph state contains all state keys like 'system_prompt'
+                        # We use this to identify the complete final state rather than intermediate node updates.
+                        if isinstance(output, dict) and "system_prompt" in output and "trajectory" in output:
+                            trajectory = output["trajectory"]
+                            if "error_messages" in output:
+                                error_messages = output["error_messages"]
+                            
+                # Calculate metrics
+                total_tokens = 0
+                total_duration_ms = 0
+                for step in trajectory:
+                    total_duration_ms += step.get("duration_ms", 0)
+                    if step.get("tokens") and isinstance(step["tokens"], dict):
+                        total_tokens += step["tokens"].get("total_tokens", 0)
+                        
+                # 7. Store the final AI response to the database
+                try:
+                    # Insert message
+                    await asyncio.to_thread(
+                        lambda: supabase.table("messages").insert({
+                            "session_id": body.session_id,
+                            "sender_type": "ai",
+                            "content": full_response,
+                            "workspace_id": body.workspace_id
+                        }).execute()
+                    )
+                    
+                    # Insert agent trace
+                    await asyncio.to_thread(
+                        lambda: supabase.table("agent_traces").insert({
+                            "session_id": body.session_id,
+                            "workspace_id": body.workspace_id,
+                            "query": body.message,
+                            "final_response": full_response,
+                            "total_tokens": total_tokens,
+                            "total_duration_ms": total_duration_ms,
+                            "trajectory": trajectory,
+                            "error_messages": error_messages
+                        }).execute()
+                    )
+                    print("Agent responded and traces saved successfully.")
+                except Exception as db_e:
+                    print("Error saving message or traces to database:", db_e)
+            
+            except Exception as stream_e:
+                print("Error occurred while streaming message:", stream_e)
+                yield f"\n\nError: {str(stream_e)}"
+
+        return StreamingResponse(generate_response(), media_type="text/plain")
     except Exception as e:
         print("Error occurred while processing message:", e)
         return JSONResponse(
