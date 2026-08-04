@@ -2,7 +2,9 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import importlib
-from server.supabase.client import supabase
+from supabase_client.client import supabase
+
+import asyncio
 
 class ProcessDocument(BaseModel):
     workspace_id: str
@@ -17,7 +19,9 @@ async def process_document(
 ) -> None:
     try: 
 
-        response = await supabase.table("workspace").select("chunk_size, chunk_overlap").eq("id", body.workspace_id).execute()
+        response = await asyncio.to_thread(
+            supabase.table("workspace").select("chunk_size, chunk_overlap").eq("id", body.workspace_id).execute
+        )
         
         if not response.data:
             raise Exception(f"Workspace with id {body.workspace_id} not found.")
@@ -26,7 +30,7 @@ async def process_document(
         chunk_size = workspace_data.get("chunk_size", 1024)
         chunk_overlap = workspace_data.get("chunk_overlap", 250)
 
-        embedding_pipeline = importlib.import_module("1_embedding_pipeline")
+        embedding_pipeline = importlib.import_module("app.controllers.1_embedding_pipeline")
         generate_embeddings_for_file = embedding_pipeline.generate_embeddings_for_file
         await generate_embeddings_for_file(body.fileName, chunk_size=chunk_size, chunk_overlap=chunk_overlap, customerId=body.customer_id, workspaceId=body.workspace_id)
         return JSONResponse(

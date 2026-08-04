@@ -6,7 +6,7 @@ load_dotenv()
 
 async def fetch_context_from_vector_db(query: str, customerId: str, workspaceId: str, top_k: int = 5, similarity_threshold: float = 0.6) -> str:
     import importlib
-    embedding_pipeline = importlib.import_module("1_embedding_pipeline")
+    embedding_pipeline = importlib.import_module("app.controllers.1_embedding_pipeline")
     get_vector_store = embedding_pipeline.get_vector_store
     from langchain_community.document_compressors import JinaRerank
     from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever

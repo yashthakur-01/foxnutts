@@ -19,4 +19,8 @@ langchain-community
 langchain-tavily
 pinecone-text
 
+supabase
+uvicorn
+fastapi
+
 pinecone

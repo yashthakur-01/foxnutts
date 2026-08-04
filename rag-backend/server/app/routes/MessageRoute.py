@@ -2,8 +2,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from server.supabase.client import supabase
-from server.app.controllers.agent_engine import get_chatbot_agent
+from supabase_client.client import supabase
+from app.controllers.agent_engine import get_chatbot_agent
 from langchain_core.messages import HumanMessage, AIMessage
 import asyncio
 
@@ -87,10 +87,24 @@ async def return_message(body: MessageRequest):
             full_response = ""
             trajectory = []
             error_messages = []
+            # Only stream tokens from nodes that produce user-facing answers.
+            # All other nodes (router, evaluator, rephraser) are internal and must be silent.
+            STREAMABLE_NODES = {"chatbot_node", "generic_response_node", "clarify_node"}
+            current_streaming_node = None
             
             try:
                 async for event in agent.astream_events(initial_state, config, version="v2"):
                     if event["event"] == "on_chat_model_stream":
+                        node = event.get("metadata", {}).get("langgraph_node")
+                        if node not in STREAMABLE_NODES:
+                            continue  # Skip router/evaluator/rephraser tokens
+
+                        # If a different answer-node starts streaming, reset for fresh answer
+                        if node != current_streaming_node:
+                            if current_streaming_node is not None:
+                                full_response = ""
+                            current_streaming_node = node
+
                         chunk = event["data"]["chunk"].content
                         if chunk:
                             full_response += chunk
@@ -114,6 +128,21 @@ async def return_message(body: MessageRequest):
                         total_tokens += step["tokens"].get("total_tokens", 0)
                         
                 # 7. Store the final AI response to the database
+                def serialize_item(item):
+                    if isinstance(item, dict):
+                        return {k: serialize_item(v) for k, v in item.items()}
+                    elif isinstance(item, (list, tuple)):
+                        return [serialize_item(i) for i in item]
+                    elif hasattr(item, "content"):
+                        return {"type": item.__class__.__name__, "content": str(item.content)}
+                    elif isinstance(item, (int, float, str, bool)) or item is None:
+                        return item
+                    else:
+                        return str(item)
+
+                clean_trajectory = serialize_item(trajectory)
+                clean_error_messages = serialize_item(error_messages)
+
                 try:
                     # Insert message
                     await asyncio.to_thread(
@@ -134,8 +163,8 @@ async def return_message(body: MessageRequest):
                             "final_response": full_response,
                             "total_tokens": total_tokens,
                             "total_duration_ms": total_duration_ms,
-                            "trajectory": trajectory,
-                            "error_messages": error_messages
+                            "trajectory": clean_trajectory,
+                            "error_messages": clean_error_messages
                         }).execute()
                     )
                     print("Agent responded and traces saved successfully.")

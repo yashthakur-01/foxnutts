@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabase from "../../../../supabase/client";
+import supabase from "../../../../supabase/adminClient";
 
 export async function POST(request: NextRequest) {
     // 1. Authenticate the user

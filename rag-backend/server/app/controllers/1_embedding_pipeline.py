@@ -7,7 +7,7 @@ from typing import Any
 from langchain_community.retrievers import PineconeHybridSearchRetriever
 
 class CustomPineconeHybridSearchRetriever(PineconeHybridSearchRetriever):
-    filter_dict: dict = None
+    filter_dict: dict | None = None
     
     def _get_relevant_documents(self, query: str, *, run_manager, **kwargs: Any):
         if self.filter_dict:
@@ -19,7 +19,7 @@ from pinecone import Pinecone
 import time
 import os
 import asyncio
-from server.app.controllers.main import main
+from app.controllers.main import main
 # pyrefly: ignore [missing-import]
 from pinecone_text.sparse import BM25Encoder
 
@@ -142,11 +142,11 @@ async def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_ov
         print(f"Error occurred while getting documents from file {file_name}: {e}")
         return
 
-if __name__ == "__main__":
-    generate_embeddings_for_file(
-        file_name="lettertogod.pdf",
-        chunk_size=1000,
-        chunk_overlap=500,
-        customerId="user1",
-        workspaceId="workspace1"
-    )
+# if __name__ == "__main__":
+#     generate_embeddings_for_file(
+#         file_name="lettertogod.pdf",
+#         chunk_size=1000,
+#         chunk_overlap=500,
+#         customerId="user1",
+#         workspaceId="workspace1"
+#     )

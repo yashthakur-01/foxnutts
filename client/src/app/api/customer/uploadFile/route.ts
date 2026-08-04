@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { r2 } from "../../../../cloudflare/client";
-import supabase from "../../../../supabase/client";
+import supabase from "../../../../supabase/adminClient";
 
 export async function POST(request: NextRequest) {
     

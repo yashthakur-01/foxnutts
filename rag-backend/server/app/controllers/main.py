@@ -13,10 +13,10 @@ from langchain_core.documents import Document
 
 import importlib
 
-pdf_parsing = importlib.import_module("0_pdf_parsing")
+pdf_parsing = importlib.import_module("app.controllers.0_pdf_parsing")
 preprocess_document = pdf_parsing.preprocess_document
 
-markdown_parsing = importlib.import_module("0_markdown_parsing")
+markdown_parsing = importlib.import_module("app.controllers.0_markdown_parsing")
 detect_markdown_headings = markdown_parsing.detect_markdown_headings
 preprocess_markdown = markdown_parsing.preprocess_markdown
 split_markdown_blocks = markdown_parsing.split_markdown_blocks

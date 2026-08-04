@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabase from "../../../../supabase/client";
+import supabase from "../../../../supabase/adminClient";
 
 export async function POST(request: NextRequest) {
     try {
@@ -13,18 +13,19 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // 1. Verify the workspace exists and fetch the cust_id for FastAPI
-        const { data: workspace, error: workspaceError } = await supabase
-            .from("workspace")
-            .select("id, cust_id")
-            .eq("id", workspace_id) // Or workspace_url, depending on your schema
-            .maybeSingle();
-            
-        if (workspaceError || !workspace) {
-            return NextResponse.json({ message: "Invalid workspace" }, { status: 404 });
+        const authHeader = request.headers.get("Authorization");
+        let customer_id = body.customer_id;
+        
+        if (authHeader) {
+            const { data: customer } = await supabase.auth.getUser(authHeader);
+            if (customer?.user) {
+                customer_id = customer.user.id;
+            }
         }
 
-        const customer_id = workspace.cust_id;
+        if (!customer_id) {
+            return NextResponse.json({ message: "Unauthorized or missing customer ID" }, { status: 401 });
+        }
 
         // 2. Save the USER's message to the Supabase database
         // Assuming you have a 'messages' table. 

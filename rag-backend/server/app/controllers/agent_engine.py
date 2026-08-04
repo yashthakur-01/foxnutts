@@ -16,7 +16,7 @@ import os
 import operator
 import time
 import asyncio
-from helper.obseravable_node import observable_node
+from app.helper.obseravable_node import observable_node
 
 
 
@@ -50,13 +50,7 @@ def get_chat_model(provider: Literal["gemini", "openai", "groq"], model_name: st
     
 
 def get_model_instance(provider: Literal["gemini", "openai", "groq"], model_name: str, temperature: float = 0.4, max_tokens: int = 512):
-    global _compiled_model_instance
-    key = f"{provider}_{model_name}_{temperature}_{max_tokens}"
-    
-    if key not in _compiled_model_instance:
-        _compiled_model_instance[key] = get_chat_model(provider, model_name, temperature, max_tokens)
-        
-    return _compiled_model_instance[key]
+    return get_chat_model(provider, model_name, temperature, max_tokens)
    
 class ModelClass(TypedDict):
     provider: Literal["gemini", "openai", "groq"]
@@ -152,7 +146,7 @@ async def conditional_router_node_1(state: AgentState,config: RunnableConfig):
 async def retrieve_context(state:AgentState, config: RunnableConfig):
 
     import importlib
-    query_pipeline = importlib.import_module("2_query_pipeline")
+    query_pipeline = importlib.import_module("app.controllers.2_query_pipeline")
     fetch_context_from_vector_db = query_pipeline.fetch_context_from_vector_db
     query=state["query"][-1]
     configurable = config.get("configurable", {})
@@ -464,7 +458,10 @@ async def start_node(state: AgentState, config: RunnableConfig):
 
 @observable_node("start_node")
 def start_node(state: AgentState, config: RunnableConfig):
-    # Pass-through node to log the initial state in trajectory
+    query = state["query"][-1]
+    msgs = state.get("messages", [])
+    if not msgs or not any(isinstance(m, HumanMessage) and m.content == query for m in msgs):
+        return {"messages": [HumanMessage(content=query)]}
     return {}
 
 def return_response(state: AgentState, config: RunnableConfig) -> str:
@@ -520,7 +517,7 @@ def get_chatbot_agent():
         graph_builder.add_edge("query_rephraser_node", "context_retriver")
         graph_builder.add_edge("unsatisfactory_handle_node", END)        
         graph_builder.add_edge("clarify_node", END) 
-        _compiled_graph_instance=graph_builder       
+        _compiled_graph_instance = graph_builder.compile()       
         
     return _compiled_graph_instance
 
