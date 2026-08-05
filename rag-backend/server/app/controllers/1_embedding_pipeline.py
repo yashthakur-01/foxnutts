@@ -134,6 +134,13 @@ async def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_ov
             item.metadata["fileName"] = file_name
             item.metadata["customerId"] = customerId
             item.metadata["workspaceId"] = workspaceId
+            
+            # Ensure file name is also embedded in the chunk text if not present
+            if not item.page_content.startswith("["):
+                page_info = item.metadata.get("page_window") or item.metadata.get("page", 1)
+                item.page_content = f"[Page {page_info}] [File: {file_name}]\n{item.page_content}"
+            elif "[File:" not in item.page_content:
+                item.page_content = f"[File: {file_name}] {item.page_content}"
         
         await store_docs(docs)
         return        
@@ -142,11 +149,26 @@ async def generate_embeddings_for_file(file_name: str, chunk_size: int, chunk_ov
         print(f"Error occurred while getting documents from file {file_name}: {e}")
         return
 
-# if __name__ == "__main__":
-#     generate_embeddings_for_file(
-#         file_name="lettertogod.pdf",
-#         chunk_size=1000,
-#         chunk_overlap=500,
-#         customerId="user1",
-#         workspaceId="workspace1"
-#     )
+
+async def delete_vectors_for_file(file_name: str) -> bool:
+    """Delete all vectors from Pinecone that match the given fileName metadata."""
+    pinecone_api = os.environ.get("PINECONE_API_KEY")
+    index_name = os.environ.get("PINECONE_INDEX")
+    if not pinecone_api or not index_name:
+        raise ValueError("Pinecone API key or index not found in environment variables.")
+    
+    try:
+        pc = Pinecone(api_key=pinecone_api)
+        index = pc.Index(index_name)
+        
+        # List and delete vectors by metadata filter
+        # Pinecone supports delete by filter on serverless/pod indexes
+        await asyncio.to_thread(
+            index.delete,
+            filter={"fileName": {"$eq": file_name}}
+        )
+        print(f"[Embedding Pipeline] Deleted all vectors for file: {file_name}")
+        return True
+    except Exception as e:
+        print(f"[Embedding Pipeline] Error deleting vectors for file {file_name}: {e}")
+        return False

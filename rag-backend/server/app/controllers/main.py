@@ -250,6 +250,20 @@ def _windows_to_documents(
         )
 
         for chunk_index, (chunk_text, section_title) in enumerate(chunk_pairs, start=1):
+            page_start = window["page_start"]
+            page_end = window["page_end"]
+            page_label = f"Page {page_start}" if page_start == page_end else f"Pages {page_start}-{page_end}"
+            
+            # Embed page number, document title, and section title directly into chunk text
+            header_parts = [f"[{page_label}]"]
+            if document_title:
+                header_parts.append(f"[Document: {document_title}]")
+            if section_title:
+                header_parts.append(f"[Section: {section_title}]")
+            
+            header_prefix = " ".join(header_parts)
+            content_with_metadata = f"{header_prefix}\n{chunk_text}"
+
             metadata = {
                 "source": str(source_path),
                 "document_title": document_title,
@@ -262,12 +276,12 @@ def _windows_to_documents(
                 "chunk_index": chunk_index,
                 "parser": parser_name,
                 "fallback_reason": fallback_reason,
-                "chunk_size_chars": len(chunk_text),
-                "chunk_size_tokens_estimate": max(1, round(len(chunk_text) / 4.2)),
+                "chunk_size_chars": len(content_with_metadata),
+                "chunk_size_tokens_estimate": max(1, round(len(content_with_metadata) / 4.2)),
                 "quality_suspicious": quality_report["suspicious"],
                 "quality_reasons": quality_report["reasons"],
             }
-            documents.append(Document(page_content=chunk_text, metadata=metadata))
+            documents.append(Document(page_content=content_with_metadata, metadata=metadata))
 
     return documents
 

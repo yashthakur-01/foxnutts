@@ -109,28 +109,52 @@ async def conditional_router_node_1(state: AgentState,config: RunnableConfig):
         llm = llm.with_structured_output(ConditionalRouterOutput, include_raw=True)
 
     
-    system_prompt = SystemMessage(content='''You are a query classifier. Use the user's latest query and the conversation history.
+    system_prompt = SystemMessage(content='''You are an expert query classifier for an enterprise document search & RAG assistant. Analyze the user's latest query along with the conversation history to classify the intent.
 
-        Return 'generic_or_repetitive' if the query is vague, generic, answerable without retrieval, or has already been sufficiently answered in the conversation.
+CRITICAL CLASSIFICATION RULES:
+1. Return 'generic_or_repetitive' ONLY for basic greetings, casual pleasantries, chit-chat, or simple conversational closings (e.g., "hi", "hello", "how are you", "thanks", "bye", "who created you").
+2. Return 'genuine_query' for ANY query that asks about business, domain, policy, structural, process, compensation, salary, technical, or document-related topics (e.g., "whats the monthly salary types", "what is the leave policy", "how is tax calculated", "what are the project milestones"). EVEN IF a query seems broad or general on the surface, it MAY exist in the user's uploaded documents and MUST be classified as 'genuine_query' to retrieve context.
+3. Return 'genuine_query' if the user asks to regenerate, expand, clarify, rephrase, or re-evaluate a previous response.
+4. DEFAULT RULE: If you are in doubt or uncertain whether a question is generic vs document-related, ALWAYS return 'genuine_query'.
 
-        Return 'genuine_query' if the query is specific, introduces a new information need, or would benefit from retrieval.
+FEW-SHOT EXAMPLES:
 
-        When the query explicitly specifies that it wants the answer to be regenerated, or is unhappy with the current answer, classify it as 'genuine_query' to trigger a new response generation.
-        
-        When uncertain, return 'genuine_query'.
+User: "hello there!"
+Classification: generic_or_repetitive
 
-        Examples:
-        User: "hello" -> generic_or_repetitive
-        User: "how are you?" -> generic_or_repetitive
-        User: "thanks!" -> generic_or_repetitive
-        User: "whats your name?" -> generic_or_repetitive
-        User: "what are the features of product X?" -> genuine_query
-        User: "how do I reset my password?" -> genuine_query
-        User: "regenerate that answer" -> genuine_query
+User: "how are you doing today?"
+Classification: generic_or_repetitive
 
-        Output exactly one of:
-        generic_or_repetitive
-        genuine_query''')
+User: "thank you, that was very helpful!"
+Classification: generic_or_repetitive
+
+User: "whats the monthly salary types"
+Classification: genuine_query
+Reason: Question about compensation/salary structures which likely exists in uploaded HR/company documents.
+
+User: "what are the types of salary components?"
+Classification: genuine_query
+Reason: Domain-specific topic requiring document retrieval.
+
+User: "what is the leave policy for new employees?"
+Classification: genuine_query
+Reason: HR policy question requiring context retrieval.
+
+User: "how do I reset my account password?"
+Classification: genuine_query
+Reason: Procedure/help topic requiring context retrieval.
+
+User: "can you regenerate that answer with more details?"
+Classification: genuine_query
+Reason: Request to regenerate response.
+
+User: "explain the key features of product X"
+Classification: genuine_query
+Reason: Product specification topic requiring retrieval.
+
+Output exactly one of:
+generic_or_repetitive
+genuine_query''')
     
     full_messages = [system_prompt] + messages
     
@@ -246,22 +270,23 @@ async def chatbot_node(state: AgentState, config: RunnableConfig):
     if not retrieved_context:
         retrieved_context = state.get("messages",[{"content": "SYSTEM OBSERVATION: unable to fetch the context"}])[-1].content
     messages = [SystemMessage(content=f"""
-                              {system_prompt}
-                              you need to answer the query only on the basis of the retrived context. Donot make anything from your self.
-                              
-                              use the relevant available tools.
-                              
-                              if any real-time information is needed to answer the question, use it to fetch the relevant information(IF THE TOOL IS AVAILABLE).
+{system_prompt}
 
-                                query: 
-                                {state['query'][-1]}
+CRITICAL INSTRUCTIONS FOR GROUNDED & CONCISE RESPONSES:
+1. **Strict Context Grounding**: Answer the query relying ONLY on the RETRIEVED CONTEXT provided below. Do NOT use outside knowledge, assumptions, or unverified facts.
+2. **Zero Hallucination**: If the answer is not contained within or directly inferable from the context, state clearly and concisely: "I cannot find this information in the provided context." Do NOT invent or extrapolate.
+3. **Concise & Direct**: Keep your response clear, structured (using bullet points where appropriate), and to the point. Avoid conversational filler or repeating the question.
+4. **Partial Information**: If the context only partially answers the query, state what is directly supported by the context and explicitly note what details are missing.
 
-                                improvement_remarks(if any):
-                                {state.get('remarks', "no remarks")}
+QUERY:
+{state['query'][-1]}
 
-                                context: 
-                                {retrieved_context}
-                              """),*state["messages"][-5:]]
+IMPROVEMENT REMARKS (IF ANY):
+{state.get('remarks', "none")}
+
+RETRIEVED CONTEXT:
+{retrieved_context}
+"""), *state["messages"][-5:]]
 
     await asyncio.sleep(2.5)
     response = await base_model.ainvoke(messages)

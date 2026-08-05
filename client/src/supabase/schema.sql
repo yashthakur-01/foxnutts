@@ -47,12 +47,27 @@ CREATE TABLE public.agent_traces (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
+-- 5. Files Table (Uploaded Documents & Processing Status)
+CREATE TABLE public.files (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_id TEXT UNIQUE NOT NULL,
+    file_name TEXT NOT NULL,
+    workspace_id UUID REFERENCES public.workspace(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'processing', 'completed', 'failed')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
 -- Create Indexes for performance
 CREATE INDEX idx_workspace_cust_id ON public.workspace(cust_id);
 CREATE INDEX idx_messages_session_id ON public.messages(session_id);
 CREATE INDEX idx_messages_workspace_id ON public.messages(workspace_id);
 CREATE INDEX idx_agent_traces_session_id ON public.agent_traces(session_id);
 CREATE INDEX idx_agent_traces_workspace_id ON public.agent_traces(workspace_id);
+CREATE INDEX idx_files_workspace_id ON public.files(workspace_id);
+CREATE INDEX idx_files_file_id ON public.files(file_id);
+CREATE INDEX idx_files_status ON public.files(status);
 
 -- ==========================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
@@ -63,6 +78,7 @@ ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.workspace ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent_traces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.files ENABLE ROW LEVEL SECURITY;
 
 -- 1. Users can only manage their own profile
 CREATE POLICY "Users can manage their own profile"
@@ -91,6 +107,15 @@ FOR SELECT USING (
 CREATE POLICY "Users can view traces for their own workspaces"
 ON public.agent_traces
 FOR SELECT USING (
+    workspace_id IN (
+        SELECT id FROM public.workspace WHERE cust_id = auth.uid()
+    )
+);
+
+-- 5. Users can manage files for their own workspaces
+CREATE POLICY "Users can manage files for their own workspaces"
+ON public.files
+FOR ALL USING (
     workspace_id IN (
         SELECT id FROM public.workspace WHERE cust_id = auth.uid()
     )

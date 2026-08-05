@@ -20,25 +20,25 @@ export async function POST(request: NextRequest) {
 
         if (!workspace_id || !fileName) {
             return NextResponse.json(
-                { message: "Missing required fields: workspace_id, fileName" }, 
+                { message: "Missing required fields: workspace_id, fileName" },
                 { status: 400 }
             );
         }
 
-        // 1. Update existing file record status to 'processing'
+        // 1. Update file status to 'processing'
         const { error: dbError } = await supabase
             .from("files")
             .update({ status: "processing", updated_at: new Date().toISOString() })
             .eq("file_id", fileName);
 
         if (dbError) {
-            console.error("Failed to update file status in Supabase:", dbError);
+            console.error("Failed to update file status:", dbError);
         }
 
-        // 2. Forward the request to FastAPI to process the R2 document
+        // 2. Forward to FastAPI reprocess endpoint (deletes old vectors + re-embeds)
         const fastApiUrl = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
-        
-        const fastApiResponse = await fetch(`${fastApiUrl}/api/process-document`, {
+
+        const fastApiResponse = await fetch(`${fastApiUrl}/api/reprocess-document`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -54,14 +54,14 @@ export async function POST(request: NextRequest) {
         const data = await fastApiResponse.json();
 
         if (!fastApiResponse.ok) {
-            console.error("FastAPI Error:", data);
-            return NextResponse.json({ message: data.message || "AI Engine failed to process document" }, { status: 500 });
+            console.error("FastAPI Reprocess Error:", data);
+            return NextResponse.json({ message: data.message || "AI Engine failed to reprocess document" }, { status: 500 });
         }
 
         return NextResponse.json(data);
 
     } catch (error) {
-        console.error("Process Document endpoint error:", error);
+        console.error("Reprocess Document endpoint error:", error);
         return NextResponse.json({ message: "Internal server error" }, { status: 500 });
     }
 }

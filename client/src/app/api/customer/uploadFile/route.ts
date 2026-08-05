@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
             uploadUrl: presignedUrl,
             uniqueFileName: uniqueFileId,
+            key: key,
             message: "Presigned URL generated successfully"
         });
 

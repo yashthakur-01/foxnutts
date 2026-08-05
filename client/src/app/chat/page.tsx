@@ -13,13 +13,45 @@ export default function ChatDashboard() {
   // File Upload State
   const [file, setFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string>("");
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Workspace Files State
+  const [workspaceFiles, setWorkspaceFiles] = useState<{ file_id: string; file_name: string; status: string; created_at: string }[]>([]);
+  const [reprocessingFileId, setReprocessingFileId] = useState<string | null>(null);
 
   // Chat State
   const [messages, setMessages] = useState<{ role: "human" | "ai"; content: string }[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isChatting, setIsChatting] = useState(false);
   const sessionId = useRef(`session-${Math.random().toString(36).substring(7)}`);
+
+  // Helper for R2 presigned URL upload with progress tracking
+  const uploadToR2WithProgress = (url: string, fileToUpload: File, onProgress: (percent: number) => void): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url);
+      xhr.setRequestHeader("Content-Type", fileToUpload.type);
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error("Network error during upload to R2"));
+      xhr.send(fileToUpload);
+    });
+  };
 
   useEffect(() => {
     const initApp = async () => {
@@ -67,9 +99,96 @@ export default function ChatDashboard() {
     initApp();
   }, [router]);
 
+  // Fetch files for the current workspace
+  const fetchFiles = async () => {
+    if (!workspaceId) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const res = await fetch("/api/customer/getFiles", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": session.access_token
+        },
+        body: JSON.stringify({ workspace_id: workspaceId })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setWorkspaceFiles(data.files || []);
+      }
+    } catch (err) {
+      console.error("Error fetching files:", err);
+    }
+  };
+
+  // Fetch files on mount and when workspaceId changes
+  useEffect(() => {
+    if (workspaceId) fetchFiles();
+  }, [workspaceId]);
+
+  // Handle reprocessing a failed file
+  const handleReprocess = async (fileId: string) => {
+    if (!workspaceId) return;
+    setReprocessingFileId(fileId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const res = await fetch("/api/customer/reprocessDocument", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": session.access_token
+        },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          fileName: fileId
+        })
+      });
+
+      if (!res.ok) throw new Error("Reprocess request failed");
+
+      // Update local state to show processing
+      setWorkspaceFiles(prev =>
+        prev.map(f => f.file_id === fileId ? { ...f, status: "processing" } : f)
+      );
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const { data, error } = await supabase
+            .from("files")
+            .select("status")
+            .eq("file_id", fileId)
+            .maybeSingle();
+
+          if (data) {
+            if (data.status === "completed" || data.status === "failed") {
+              setWorkspaceFiles(prev =>
+                prev.map(f => f.file_id === fileId ? { ...f, status: data.status } : f)
+              );
+              setReprocessingFileId(null);
+              clearInterval(pollInterval);
+            }
+          }
+        } catch (pollErr) {
+          console.error("Reprocess poll error:", pollErr);
+        }
+      }, 3000);
+
+    } catch (err) {
+      console.error("Reprocess error:", err);
+      setReprocessingFileId(null);
+    }
+  };
+
   const handleFileUpload = async () => {
     if (!file || !workspaceId) return;
     setIsUploading(true);
+    setUploadProgress(0);
     setUploadStatus("Getting secure upload URL...");
 
     try {
@@ -91,19 +210,32 @@ export default function ChatDashboard() {
       });
 
       if (!presignedRes.ok) throw new Error("Failed to get presigned URL");
-      const { uploadUrl, uniqueFileName } = await presignedRes.json();
+      const { uploadUrl, uniqueFileName, key } = await presignedRes.json();
 
-      setUploadStatus("Uploading file to Cloudflare R2...");
-      // 2. Upload directly to R2
-      const r2Res = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type },
-        body: file
+      setUploadStatus("Uploading file to Cloudflare R2... 0%");
+      // 2. Upload directly to R2 with XHR progress monitoring
+      await uploadToR2WithProgress(uploadUrl, file, (percent) => {
+        setUploadProgress(percent);
+        setUploadStatus(`Uploading file to Cloudflare R2... ${percent}%`);
       });
 
-      if (!r2Res.ok) throw new Error("Failed to upload to R2");
+      // 3. R2 upload complete — insert file record into Supabase with 'uploaded' status
+      setUploadStatus("Saving file record...");
+      const { error: dbError } = await supabase
+        .from("files")
+        .insert({
+          file_id: uniqueFileName,
+          file_name: file.name,
+          workspace_id: workspaceId,
+          file_path: key,
+          status: "uploaded"
+        });
 
-      setUploadStatus("Processing document with FastAPI...");
+      if (dbError) {
+        console.error("Failed to insert file record:", dbError);
+      }
+
+      setUploadStatus("Queuing document for background processing...");
       // 3. Process document in backend
       const processRes = await fetch("/api/customer/processDocument", {
         method: "POST",
@@ -119,12 +251,48 @@ export default function ChatDashboard() {
 
       if (!processRes.ok) throw new Error("Backend processing failed");
 
-      setUploadStatus("✅ Document uploaded and processed successfully!");
+      setUploadStatus("⏳ Document uploaded! Processing in background (creating embeddings)...");
       setFile(null);
+
+      // Refresh file list to show the new file
+      await fetchFiles();
+
+      // 4. Poll Supabase database for file status completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const { data, error } = await supabase
+            .from("files")
+            .select("status")
+            .eq("file_id", uniqueFileName)
+            .maybeSingle();
+
+          if (error) {
+            console.error("Polling status error:", error);
+            return;
+          }
+
+          if (data) {
+            if (data.status === "completed") {
+              setUploadStatus("✅ Document processing complete! Ready for chat.");
+              setIsUploading(false);
+              setUploadProgress(100);
+              await fetchFiles();
+              clearInterval(pollInterval);
+            } else if (data.status === "failed") {
+              setUploadStatus("❌ Document processing failed. Use the reprocess button below.");
+              setIsUploading(false);
+              await fetchFiles();
+              clearInterval(pollInterval);
+            }
+          }
+        } catch (pollErr) {
+          console.error("Polling error:", pollErr);
+        }
+      }, 3000); // Check every 3 seconds
+
     } catch (err: any) {
       console.error(err);
       setUploadStatus(`❌ Error: ${err.message}`);
-    } finally {
       setIsUploading(false);
     }
   };
@@ -220,6 +388,16 @@ export default function ChatDashboard() {
               >
                 {isUploading ? "Uploading & Processing..." : "Upload Document"}
               </button>
+
+              {isUploading && (
+                <div className="w-full bg-gray-950 rounded-full h-3 overflow-hidden border border-gray-800 p-0.5">
+                  <div
+                    className="bg-blue-500 h-full rounded-full transition-all duration-200"
+                    style={{ width: `${uploadProgress}%` }}
+                  ></div>
+                </div>
+              )}
+
               {uploadStatus && (
                 <div className="text-sm text-gray-300 bg-gray-800/50 p-3 rounded border border-gray-700 break-words">
                   {uploadStatus}
@@ -227,6 +405,51 @@ export default function ChatDashboard() {
               )}
             </div>
           </div>
+
+          {/* Uploaded Files List */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Uploaded Files</h3>
+            {workspaceFiles.length === 0 ? (
+              <p className="text-sm text-gray-500">No files uploaded yet.</p>
+            ) : (
+              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                {workspaceFiles.map((f) => (
+                  <div
+                    key={f.file_id}
+                    className="flex items-center justify-between gap-2 p-3 rounded-lg bg-gray-800/50 border border-gray-700"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-200 truncate" title={f.file_name}>
+                        {f.file_name}
+                      </p>
+                      <span
+                        className={`text-xs font-medium ${
+                          f.status === "completed"
+                            ? "text-green-400"
+                            : f.status === "failed"
+                            ? "text-red-400"
+                            : "text-yellow-400"
+                        }`}
+                      >
+                        {f.status === "completed" ? "✅ Completed" : f.status === "failed" ? "❌ Failed" : "⏳ Processing"}
+                      </span>
+                    </div>
+
+                    {f.status === "failed" && (
+                      <button
+                        onClick={() => handleReprocess(f.file_id)}
+                        disabled={reprocessingFileId === f.file_id}
+                        className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {reprocessingFileId === f.file_id ? "Reprocessing..." : "Reprocess"}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="text-xs text-gray-500">
             Workspace ID: <br/><code className="text-blue-400">{workspaceId}</code>
           </div>
