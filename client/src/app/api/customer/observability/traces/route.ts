@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabase from "../../../../../supabase/adminClient";
+import { getCachedUser } from "../../../../../lib/authCache";
+import redisClient from "../../../../../lib/redisClient";
 
 export async function POST(request: NextRequest) {
     const authHeader = request.headers.get("Authorization");
-    if (!authHeader) {
-        return NextResponse.json({ message: "Authorization header not found", success: false }, { status: 401 });
-    }
-
-    const { data: customer, error: customerError } = await supabase.auth.getUser(authHeader);
-    if (customerError || !customer?.user) {
+    const { user, error: customerError } = await getCachedUser(authHeader);
+    if (customerError || !user) {
         return NextResponse.json({ message: `Authorization error occurred - ${customerError?.message}`, success: false }, { status: 401 });
     }
 
@@ -23,11 +21,28 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        const pageKey = `observability_traces:${workspace_id}:${page}:${limit}`;
+        const trackerSetKey = `workspace_trace_keys:${workspace_id}`;
+
+        // 1. Check Redis Cache
+        if (redisClient) {
+            try {
+                const cachedTraces = await redisClient.get(pageKey);
+                if (cachedTraces) {
+                    console.log(`[Observability Traces] Cache HIT for key: ${pageKey}`);
+                    return NextResponse.json(JSON.parse(cachedTraces));
+                }
+            } catch (rErr) {
+                console.warn("[Observability Traces] Redis lookup warning:", rErr);
+            }
+        }
+
+        // 2. Cache Miss: Query Supabase DB
         const offset = (page - 1) * limit;
 
         const { data: traces, error, count } = await supabase
             .from("agent_traces")
-            .select("id, session_id, query, final_response, total_tokens, total_duration_ms, trajectory, error_messages, query_context_pairs, context_found, created_at", { count: "exact" })
+            .select("id, session_id, query, final_response, total_tokens, total_duration_ms, trajectory, error_messages, query_context_pairs, context_found, query_type, created_at", { count: "exact" })
             .eq("workspace_id", workspace_id)
             .order("created_at", { ascending: false })
             .range(offset, offset + limit - 1);
@@ -40,13 +55,29 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        return NextResponse.json({
+        const payload = {
             traces: traces || [],
             total: count || 0,
             page,
             limit,
             success: true
-        });
+        };
+
+        // 3. Store in Redis and register in workspace tracker Set
+        if (redisClient) {
+            try {
+                const pipeline = redisClient.pipeline();
+                pipeline.setex(pageKey, 600, JSON.stringify(payload));
+                pipeline.sadd(trackerSetKey, pageKey);
+                pipeline.expire(trackerSetKey, 600);
+                await pipeline.exec();
+                console.log(`[Observability Traces] Cached key and registered in set: ${pageKey}`);
+            } catch (rErr) {
+                console.warn("[Observability Traces] Redis setex warning:", rErr);
+            }
+        }
+
+        return NextResponse.json(payload);
 
     } catch (error) {
         console.error("Observability traces endpoint error:", error);

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabase from "../../../../supabase/adminClient";
+import { getCachedUser } from "../../../../lib/authCache";
 
 export async function POST(request: NextRequest) {
     try {
@@ -14,17 +15,11 @@ export async function POST(request: NextRequest) {
         }
 
         const authHeader = request.headers.get("Authorization");
-        let customer_id = body.customer_id;
-        
-        if (authHeader) {
-            const { data: customer } = await supabase.auth.getUser(authHeader);
-            if (customer?.user) {
-                customer_id = customer.user.id;
-            }
-        }
+        const { user, error: authError } = await getCachedUser(authHeader);
+        let customer_id = user?.id || body.customer_id;
 
         if (!customer_id) {
-            return NextResponse.json({ message: "Unauthorized or missing customer ID" }, { status: 401 });
+            return NextResponse.json({ message: `Unauthorized or missing customer ID: ${authError?.message}` }, { status: 401 });
         }
 
         // 2. Save the USER's message to the Supabase database

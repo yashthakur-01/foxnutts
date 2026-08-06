@@ -7,6 +7,18 @@ interface ObservabilitySectionProps {
   workspaceId: string;
 }
 
+interface MinutePoint {
+  time: string;
+  rpm: number;
+  tpm: number;
+}
+
+interface DailyPoint {
+  date: string;
+  rpd: number;
+  tpd: number;
+}
+
 interface Metrics {
   total_queries: number;
   total_tokens: number;
@@ -16,6 +28,14 @@ interface Metrics {
   likes: number;
   dislikes: number;
   total_rated: number;
+  // Rate Metrics
+  rpm: number;
+  tpm: number;
+  rpd: number;
+  tpd: number;
+  // Time Series Timelines
+  minute_timeline: MinutePoint[];
+  daily_timeline: DailyPoint[];
 }
 
 interface Trace {
@@ -32,6 +52,7 @@ interface Trace {
     context_received: string;
     context_found?: boolean;
   }>;
+  query_type?: string;
   created_at: string;
 }
 
@@ -72,7 +93,7 @@ export default function ObservabilitySection({ workspaceId }: ObservabilitySecti
         "Authorization": session.access_token,
       };
 
-      // 1. Fetch Metrics
+      // 1. Fetch Metrics & Time-Series Timelines
       const resMetrics = await fetch("/api/customer/observability/metrics", {
         method: "POST",
         headers,
@@ -155,16 +176,144 @@ export default function ObservabilitySection({ workspaceId }: ObservabilitySecti
     }
   };
 
+  // SVG Chart Helper for Minute-by-Minute Timeline (RPM & TPM)
+  const renderMinuteChart = () => {
+    if (!metrics || !metrics.minute_timeline || metrics.minute_timeline.length === 0) return null;
+    const data = metrics.minute_timeline;
+    const maxRpm = Math.max(...data.map(d => d.rpm), 1);
+    const height = 120;
+    const width = 600;
+
+    return (
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3">
+        <div className="flex justify-between items-center">
+          <div>
+            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+              📈 Real-Time Requests Per Minute (RPM) — Last 60 Minutes
+            </h4>
+            <p className="text-xs text-gray-400">Live per-minute query throughput</p>
+          </div>
+          <span className="text-xs font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800 px-2.5 py-1 rounded-md">
+            Peak: {maxRpm} req/min
+          </span>
+        </div>
+
+        <div className="relative w-full h-[120px]">
+          <svg className="w-full h-full overflow-visible" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="rpmGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            {/* Draw Area Path */}
+            <path
+              d={
+                data.reduce((acc, point, index) => {
+                  const x = (index / (data.length - 1)) * width;
+                  const y = height - (point.rpm / maxRpm) * (height - 15);
+                  return `${acc} ${index === 0 ? "M" : "L"} ${x} ${y}`;
+                }, "") + ` L ${width} ${height} L 0 ${height} Z`
+              }
+              fill="url(#rpmGrad)"
+            />
+            {/* Draw Line Path */}
+            <path
+              d={data.reduce((acc, point, index) => {
+                const x = (index / (data.length - 1)) * width;
+                const y = height - (point.rpm / maxRpm) * (height - 15);
+                return `${acc} ${index === 0 ? "M" : "L"} ${x} ${y}`;
+              }, "")}
+              fill="none"
+              stroke="#06b6d4"
+              strokeWidth="2"
+            />
+          </svg>
+        </div>
+
+        <div className="flex justify-between text-[10px] text-gray-500 font-mono">
+          <span>{data[0]?.time}</span>
+          <span>{data[Math.floor(data.length / 2)]?.time}</span>
+          <span>{data[data.length - 1]?.time}</span>
+        </div>
+      </div>
+    );
+  };
+
+  // SVG Chart Helper for Daily Timeline (RPD & TPD)
+  const renderDailyChart = () => {
+    if (!metrics || !metrics.daily_timeline || metrics.daily_timeline.length === 0) return null;
+    const data = metrics.daily_timeline;
+    const maxRpd = Math.max(...data.map(d => d.rpd), 1);
+    const height = 120;
+    const width = 600;
+
+    return (
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3">
+        <div className="flex justify-between items-center">
+          <div>
+            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+              📅 Daily Query Volume (RPD) — Last 30 Days
+            </h4>
+            <p className="text-xs text-gray-400">Day-by-day request volume history</p>
+          </div>
+          <span className="text-xs font-mono text-purple-400 bg-purple-950/60 border border-purple-800 px-2.5 py-1 rounded-md">
+            Peak: {maxRpd} req/day
+          </span>
+        </div>
+
+        <div className="relative w-full h-[120px]">
+          <svg className="w-full h-full overflow-visible" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="rpdGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#a855f7" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="#a855f7" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            {/* Draw Area Path */}
+            <path
+              d={
+                data.reduce((acc, point, index) => {
+                  const x = (index / (data.length - 1)) * width;
+                  const y = height - (point.rpd / maxRpd) * (height - 15);
+                  return `${acc} ${index === 0 ? "M" : "L"} ${x} ${y}`;
+                }, "") + ` L ${width} ${height} L 0 ${height} Z`
+              }
+              fill="url(#rpdGrad)"
+            />
+            {/* Draw Line Path */}
+            <path
+              d={data.reduce((acc, point, index) => {
+                const x = (index / (data.length - 1)) * width;
+                const y = height - (point.rpd / maxRpd) * (height - 15);
+                return `${acc} ${index === 0 ? "M" : "L"} ${x} ${y}`;
+              }, "")}
+              fill="none"
+              stroke="#a855f7"
+              strokeWidth="2"
+            />
+          </svg>
+        </div>
+
+        <div className="flex justify-between text-[10px] text-gray-500 font-mono">
+          <span>{data[0]?.date}</span>
+          <span>{data[Math.floor(data.length / 2)]?.date}</span>
+          <span>{data[data.length - 1]?.date}</span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
         <div>
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-            📊 AI Engine Observability
+            📊 AI Engine Observability & Rate Metrics
           </h2>
           <p className="text-sm text-gray-400 mt-1">
-            Real-time analytics, vector context traces, and knowledge base gap detection.
+            Real-time rate metrics (RPM, TPM, RPD, TPD), vector traces, and time-series volume trends.
           </p>
         </div>
         <button
@@ -176,65 +325,85 @@ export default function ObservabilitySection({ workspaceId }: ObservabilitySecti
         </button>
       </div>
 
-      {/* Metrics Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* Primary KPI Cards Grid (8 Cards) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-4">
+        {/* RPM (Requests Per Min) */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-cyan-400 font-bold uppercase tracking-wider">RPM (Req/Min)</span>
+          <div className="text-2xl font-extrabold text-white mt-1">
+            {metrics ? metrics.rpm : 0}
+          </div>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">Last 60 Seconds</span>
+        </div>
+
+        {/* TPM (Tokens Per Min) */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-blue-400 font-bold uppercase tracking-wider">TPM (Tokens/Min)</span>
+          <div className="text-2xl font-extrabold text-blue-300 mt-1">
+            {metrics ? metrics.tpm.toLocaleString() : 0}
+          </div>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">Last 60 Seconds</span>
+        </div>
+
+        {/* RPD (Requests Per Day) */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-purple-400 font-bold uppercase tracking-wider">RPD (Req/Day)</span>
+          <div className="text-2xl font-extrabold text-white mt-1">
+            {metrics ? metrics.rpd : 0}
+          </div>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">Last 24 Hours</span>
+        </div>
+
+        {/* TPD (Tokens Per Day) */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-pink-400 font-bold uppercase tracking-wider">TPD (Tokens/Day)</span>
+          <div className="text-2xl font-extrabold text-pink-300 mt-1">
+            {metrics ? metrics.tpd.toLocaleString() : 0}
+          </div>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">Last 24 Hours</span>
+        </div>
+
         {/* Total Queries */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Total Queries</span>
-          <div className="text-2xl font-extrabold text-white mt-2">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Total Queries</span>
+          <div className="text-xl font-bold text-gray-200 mt-1">
             {metrics ? metrics.total_queries : 0}
           </div>
-          <span className="text-xs text-gray-500 mt-1 block">Chat Sessions Processed</span>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">All-time Logged</span>
         </div>
 
-        {/* Token Usage */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Total Tokens</span>
-          <div className="text-2xl font-extrabold text-blue-400 mt-2">
+        {/* Total Tokens */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Total Tokens</span>
+          <div className="text-xl font-bold text-gray-200 mt-1">
             {metrics ? metrics.total_tokens.toLocaleString() : 0}
           </div>
-          <span className="text-xs text-gray-500 mt-1 block">Prompt + Completion</span>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">Prompt + Completion</span>
         </div>
 
-        {/* Average Latency */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Avg Latency</span>
-          <div className="text-2xl font-extrabold text-purple-400 mt-2">
+        {/* Avg Latency */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Avg Latency</span>
+          <div className="text-xl font-bold text-purple-300 mt-1">
             {metrics ? `${(metrics.avg_duration_ms / 1000).toFixed(2)}s` : "0s"}
           </div>
-          <span className="text-xs text-gray-500 mt-1 block">End-to-End Duration</span>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">End-to-End Duration</span>
         </div>
 
         {/* Context Match Rate */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Context Match Rate</span>
-          <div className="text-2xl font-extrabold text-emerald-400 mt-2">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <span className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Context Match Rate</span>
+          <div className="text-xl font-bold text-emerald-400 mt-1">
             {metrics ? `${metrics.context_found_rate}%` : "0%"}
           </div>
-          <span className="text-xs text-gray-500 mt-1 block">Reranker Passed Threshold</span>
+          <span className="text-[11px] text-gray-500 mt-0.5 block">Relevance Score Passed</span>
         </div>
+      </div>
 
-        {/* CSAT Score */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">CSAT Score</span>
-          {metrics && metrics.total_rated > 0 ? (
-            <>
-              <div className="text-2xl font-extrabold text-amber-400 mt-2">
-                {metrics.csat_score}%
-              </div>
-              <span className="text-xs text-gray-500 mt-1 block">
-                👍 {metrics.likes} / 👎 {metrics.dislikes}
-              </span>
-            </>
-          ) : (
-            <>
-              <div className="text-lg font-bold text-gray-500 mt-2">
-                No ratings yet
-              </div>
-              <span className="text-xs text-gray-500 mt-1 block">0 likes or dislikes</span>
-            </>
-          )}
-        </div>
+      {/* Time-Series Charts Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {renderMinuteChart()}
+        {renderDailyChart()}
       </div>
 
       {/* Tabs Navigation */}
@@ -298,6 +467,8 @@ export default function ObservabilitySection({ workspaceId }: ObservabilitySecti
                 </thead>
                 <tbody className="divide-y divide-gray-800">
                   {traces.map((trace) => {
+                    const isGeneric = trace.query_type === "generic_or_repetitive" || 
+                      trace.trajectory?.some(s => s.node === "generic_response_node" || s.output === "generic_or_repetitive");
                     const pairs = Array.isArray(trace.query_context_pairs) ? trace.query_context_pairs : [];
                     const hasContext = pairs.some(p => p.context_found !== false && p.context_received && p.context_received.trim().length > 0);
 
@@ -316,7 +487,11 @@ export default function ObservabilitySection({ workspaceId }: ObservabilitySecti
                           {trace.total_duration_ms}ms
                         </td>
                         <td className="p-4">
-                          {hasContext ? (
+                          {isGeneric ? (
+                            <span className="px-2.5 py-1 text-xs rounded-full bg-blue-950 text-blue-400 border border-blue-800 font-medium">
+                              💬 Conversational
+                            </span>
+                          ) : hasContext ? (
                             <span className="px-2.5 py-1 text-xs rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 font-medium">
                               ✅ Context Matched
                             </span>
@@ -387,49 +562,15 @@ export default function ObservabilitySection({ workspaceId }: ObservabilitySecti
 
       {/* TAB 3: CONFIG HYPERPARAMETER SETTINGS */}
       {activeTab === "config" && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 max-w-2xl space-y-6">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 max-w-2xl space-y-4">
           <div>
-            <h3 className="text-lg font-bold text-white">⚙️ Vector Relevance Score Hyperparameter</h3>
+            <h3 className="text-lg font-bold text-white">⚙️ Workspace Settings Redirect</h3>
             <p className="text-sm text-gray-400 mt-1">
-              Adjust the Jina Reranker relevance score threshold. Queries with document similarity scores below this threshold will be marked as unanswered gaps.
+              The Context Relevance Threshold, System Prompt, LLM Provider, Temperature, and Workspace Switching features have been moved to the main <strong className="text-emerald-400">⚙️ Workspace Settings</strong> tab.
             </p>
           </div>
-
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <label className="text-sm font-medium text-gray-200">
-                Similarity Threshold (<code className="text-purple-400">{similarityThreshold}</code>)
-              </label>
-              <span className="text-xs text-gray-400">Range: 0.1 (Strictness: Low) to 0.9 (Strictness: High)</span>
-            </div>
-
-            <input
-              type="range"
-              min="0.1"
-              max="0.9"
-              step="0.05"
-              value={similarityThreshold}
-              onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
-              className="w-full h-2 bg-gray-950 rounded-lg appearance-none cursor-pointer accent-purple-500"
-            />
-
-            <div className="flex justify-between text-xs text-gray-500">
-              <span>0.1 (Accept Low Similarity)</span>
-              <span>0.6 (Default Recommended)</span>
-              <span>0.9 (Require Exact Matches)</span>
-            </div>
-
-            <button
-              onClick={handleSaveConfig}
-              disabled={isSavingConfig}
-              className="bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium py-2.5 px-6 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {isSavingConfig ? "Saving Settings..." : "Save Threshold"}
-            </button>
-
-            {configMessage && (
-              <p className="text-sm font-medium mt-2">{configMessage}</p>
-            )}
+          <div className="p-4 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-emerald-300 text-sm">
+            💡 Click on <strong>"⚙️ Workspace Settings"</strong> in the top header navigation bar to tune relevance thresholds or add a new workspace.
           </div>
         </div>
       )}

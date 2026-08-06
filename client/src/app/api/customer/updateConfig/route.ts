@@ -23,9 +23,12 @@ export async function POST(request: NextRequest) {
     // Security best practice: explicitly list allowed fields
     const allowedFields = [
         "chatbot_name", 
+        "workspace_name",
         "system_prompt", 
         "temperature", 
         "model_name", 
+        "provider",
+        "search_enabled",
         "primary_color",
         "chunk_size",
         "chunk_overlap",
@@ -55,10 +58,20 @@ export async function POST(request: NextRequest) {
         }
 
         // 4. Update workspace configuration in Supabase
-        const { error: updateError } = await supabase
+        let { error: updateError } = await supabase
             .from("workspace")
             .update(updatePayload)
             .eq("id", workspace_id);
+
+        if (updateError && updateError.message?.includes("workspace_name")) {
+            // Fallback if workspace_name column does not exist in database table yet
+            delete updatePayload.workspace_name;
+            const retryRes = await supabase
+                .from("workspace")
+                .update(updatePayload)
+                .eq("id", workspace_id);
+            updateError = retryRes.error;
+        }
 
         if (updateError) {
             return NextResponse.json({ message: `Failed to update configuration: ${updateError.message}`, success: false }, { status: 500 });

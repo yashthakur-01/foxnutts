@@ -4,13 +4,14 @@ import { useEffect, useState, useRef } from "react";
 import { createClient } from "../../supabase/browserClient";
 import { useRouter } from "next/navigation";
 import ObservabilitySection from "../../components/ObservabilitySection";
+import SettingsSection from "../../components/SettingsSection";
 
 export default function ChatDashboard() {
   const supabase = createClient();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [activeMainTab, setActiveMainTab] = useState<"chat" | "observability">("chat");
+  const [activeMainTab, setActiveMainTab] = useState<"chat" | "observability" | "settings">("chat");
   
   // File Upload State
   const [file, setFile] = useState<File | null>(null);
@@ -21,6 +22,7 @@ export default function ChatDashboard() {
   // Workspace Files State
   const [workspaceFiles, setWorkspaceFiles] = useState<{ file_id: string; file_name: string; status: string; created_at: string }[]>([]);
   const [reprocessingFileId, setReprocessingFileId] = useState<string | null>(null);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 
   // Chat State
   const [messages, setMessages] = useState<{ role: "human" | "ai"; content: string }[]>([]);
@@ -184,6 +186,43 @@ export default function ChatDashboard() {
     } catch (err) {
       console.error("Reprocess error:", err);
       setReprocessingFileId(null);
+    }
+  };
+
+  // Handle deleting a file from DB, R2, and Pinecone
+  const handleDeleteFile = async (fileId: string) => {
+    if (!workspaceId) return;
+    if (!confirm("Are you sure you want to delete this file? This will permanently remove its record, R2 storage, and Pinecone vectors.")) return;
+
+    setDeletingFileId(fileId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const res = await fetch("/api/customer/deleteFile", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": session.access_token
+        },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          file_id: fileId
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.message || "Failed to delete file");
+      }
+
+      // Remove file from local state list immediately
+      setWorkspaceFiles(prev => prev.filter(f => f.file_id !== fileId));
+    } catch (err: any) {
+      console.error("Delete file error:", err);
+      alert(err.message || "Failed to delete file");
+    } finally {
+      setDeletingFileId(null);
     }
   };
 
@@ -402,6 +441,16 @@ export default function ChatDashboard() {
             >
               📊 Observability Analytics
             </button>
+            <button
+              onClick={() => setActiveMainTab("settings")}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                activeMainTab === "settings"
+                  ? "bg-emerald-600 text-white"
+                  : "bg-gray-800 text-gray-400 hover:text-white"
+              }`}
+            >
+              ⚙️ Workspace Settings
+            </button>
           </div>
 
           <button onClick={handleLogout} className="text-sm text-red-400 hover:text-red-300 font-medium px-3.5 py-1.5 rounded-lg bg-gray-950 border border-gray-800">
@@ -409,9 +458,11 @@ export default function ChatDashboard() {
           </button>
         </div>
 
-        {/* Observability Section */}
+        {/* Active Tab Views */}
         {activeMainTab === "observability" && workspaceId ? (
           <ObservabilitySection workspaceId={workspaceId} />
+        ) : activeMainTab === "settings" && workspaceId ? (
+          <SettingsSection workspaceId={workspaceId} onWorkspaceChange={(newId) => setWorkspaceId(newId)} />
         ) : (
           <div className="flex gap-8">
             {/* Left Column: Upload */}
@@ -482,15 +533,26 @@ export default function ChatDashboard() {
                           </span>
                         </div>
 
-                        {f.status === "failed" && (
+                        <div className="flex items-center gap-1.5">
+                          {f.status === "failed" && (
+                            <button
+                              onClick={() => handleReprocess(f.file_id)}
+                              disabled={reprocessingFileId === f.file_id || deletingFileId === f.file_id}
+                              className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+                            >
+                              {reprocessingFileId === f.file_id ? "Reprocessing..." : "Reprocess"}
+                            </button>
+                          )}
+
                           <button
-                            onClick={() => handleReprocess(f.file_id)}
-                            disabled={reprocessingFileId === f.file_id}
-                            className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+                            onClick={() => handleDeleteFile(f.file_id)}
+                            disabled={deletingFileId === f.file_id || reprocessingFileId === f.file_id}
+                            className="text-xs bg-red-600/80 hover:bg-red-600 text-white px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+                            title="Delete file, R2 object, and Pinecone vectors"
                           >
-                            {reprocessingFileId === f.file_id ? "Reprocessing..." : "Reprocess"}
+                            {deletingFileId === f.file_id ? "Deleting..." : "🗑️ Delete"}
                           </button>
-                        )}
+                        </div>
                       </div>
                     ))}
                   </div>

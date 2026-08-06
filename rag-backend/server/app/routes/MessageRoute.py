@@ -15,7 +15,14 @@ class MessageRequest(BaseModel):
     session_id: str
     message: str
 
-from app.helpers.cache import get_cached_workspace_config, invalidate_workspace_cache
+router = APIRouter()
+from app.helpers.cache import (
+    get_cached_workspace_config,
+    invalidate_workspace_cache,
+    get_cached_chat_history,
+    append_chat_message_to_cache,
+    invalidate_observability_cache
+)
 
 class InvalidateCacheRequest(BaseModel):
     workspace_id: str
@@ -50,25 +57,23 @@ async def return_message(body: MessageRequest):
             }
         }
         
-        # 4. Fetch chat history (last 8 messages)
-        history_result = await asyncio.to_thread(
-            lambda: supabase.table("messages").select("sender_type, content").eq("session_id", body.session_id).order("created_at", desc=True).limit(8).execute()
-        )
+        # 4. Fetch chat history from Redis cache (fallback to Supabase)
+        cached_msgs = await asyncio.to_thread(get_cached_chat_history, body.session_id, 8)
         
         formatted_history = []
-        if history_result.data:
-            messages_data = list(reversed(history_result.data))
-            
-            # The current message was already inserted by Next.js prior to this call, 
-            # so we pop it from history to avoid passing it twice to the LLM.
-            if messages_data and messages_data[-1].get("sender_type") == "human" and messages_data[-1].get("content") == body.message:
-                messages_data.pop()
-                
-            for msg in messages_data:
-                if msg.get("sender_type") == "human":
-                    formatted_history.append(HumanMessage(content=msg.get("content")))
-                elif msg.get("sender_type") == "ai":
-                    formatted_history.append(AIMessage(content=msg.get("content")))
+        for msg in cached_msgs:
+            sender = msg.get("sender_type")
+            content = msg.get("content")
+            if sender == "human":
+                # Skip if it matches the current incoming message to avoid duplicate
+                if content == body.message:
+                    continue
+                formatted_history.append(HumanMessage(content=content))
+            elif sender == "ai":
+                formatted_history.append(AIMessage(content=content))
+
+        # Append current incoming human query to Redis chat history cache
+        await asyncio.to_thread(append_chat_message_to_cache, body.session_id, "human", body.message)
 
         # 5. Setup initial state
         initial_state = {
@@ -94,9 +99,7 @@ async def return_message(body: MessageRequest):
             error_messages = []
             query_context_pairs = []
             query_type = "genuine_query"
-            # Only stream tokens from nodes that produce user-facing answers.
-            # All other nodes (router, evaluator, rephraser) are internal and must be silent.
-            STREAMABLE_NODES = {"chatbot_node", "generic_response_node", "clarify_node"}
+            STREAMABLE_NODES = {"chatbot_node", "generic_response_node", "clarify_node", "unsatisfactory_handle_node"}
             current_streaming_node = None
             
             try:
@@ -104,9 +107,8 @@ async def return_message(body: MessageRequest):
                     if event["event"] == "on_chat_model_stream":
                         node = event.get("metadata", {}).get("langgraph_node")
                         if node not in STREAMABLE_NODES:
-                            continue  # Skip router/evaluator/rephraser tokens
+                            continue
 
-                        # If a different answer-node starts streaming, reset for fresh answer
                         if node != current_streaming_node:
                             if current_streaming_node is not None:
                                 full_response = ""
@@ -119,8 +121,6 @@ async def return_message(body: MessageRequest):
                             
                     elif event["event"] == "on_chain_end":
                         output = event["data"].get("output")
-                        # The final graph state contains all state keys like 'system_prompt'
-                        # We use this to identify the complete final state rather than intermediate node updates.
                         if isinstance(output, dict) and "system_prompt" in output and "trajectory" in output:
                             trajectory = output["trajectory"]
                             if "error_messages" in output:
@@ -133,6 +133,13 @@ async def return_message(body: MessageRequest):
                                 if output["route"][0] == "generic_or_repetitive":
                                     query_type = "generic_or_repetitive"
                             
+                            # Fallback if non-LLM streaming node returned an AIMessage in final state
+                            if not full_response and "messages" in output and output["messages"]:
+                                last_msg = output["messages"][-1]
+                                if hasattr(last_msg, "content") and last_msg.content:
+                                    full_response = str(last_msg.content)
+                                    yield full_response
+                            
                 # Calculate metrics
                 total_tokens = 0
                 total_duration_ms = 0
@@ -141,7 +148,7 @@ async def return_message(body: MessageRequest):
                     if step.get("tokens") and isinstance(step["tokens"], dict):
                         total_tokens += step["tokens"].get("total_tokens", 0)
                         
-                # 7. Store the final AI response to the database
+                # 7. Store the final AI response to the database & Redis cache
                 def serialize_item(item):
                     if isinstance(item, dict):
                         return {k: serialize_item(v) for k, v in item.items()}
@@ -159,7 +166,7 @@ async def return_message(body: MessageRequest):
                 clean_query_context_pairs = serialize_item(query_context_pairs)
 
                 try:
-                    # Insert message
+                    # Insert AI message to Supabase
                     await asyncio.to_thread(
                         lambda: supabase.table("messages").insert({
                             "session_id": body.session_id,
@@ -168,8 +175,11 @@ async def return_message(body: MessageRequest):
                             "workspace_id": body.workspace_id
                         }).execute()
                     )
+
+                    # Append AI message to Redis chat history cache
+                    await asyncio.to_thread(append_chat_message_to_cache, body.session_id, "ai", full_response)
                     
-                    # Insert agent trace
+                    # Insert agent trace to Supabase
                     await asyncio.to_thread(
                         lambda: supabase.table("agent_traces").insert({
                             "session_id": body.session_id,
@@ -184,9 +194,12 @@ async def return_message(body: MessageRequest):
                             "query_type": query_type
                         }).execute()
                     )
-                    print("Agent responded and traces saved successfully.")
+
+                    # Invalidate observability cache for fresh analytics
+                    await asyncio.to_thread(invalidate_observability_cache, body.workspace_id)
+                    print("[MessageRoute] AI response cached and observability cache invalidated successfully.")
                 except Exception as db_e:
-                    print("Error saving message or traces to database:", db_e)
+                    print("Error saving message or traces to database/cache:", db_e)
             
             except Exception as stream_e:
                 print("Error occurred while streaming message:", stream_e)

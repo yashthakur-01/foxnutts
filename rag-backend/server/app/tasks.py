@@ -101,3 +101,30 @@ def reprocess_document_task(self, file_name: str, chunk_size: int, chunk_overlap
         _update_file_status(file_name, "failed")
 
         raise self.retry(exc=exc, countdown=10)
+
+
+@celery_app.task(bind=True, max_retries=3)
+def delete_document_task(self, file_name: str, customer_id: str, workspace_id: str):
+    """
+    Celery background task for deleting vector embeddings from Pinecone index.
+    """
+    print(f"[Celery Worker] Starting DELETE task for file: {file_name}")
+    try:
+        embedding_pipeline = importlib.import_module("app.controllers.1_embedding_pipeline")
+        delete_vectors_for_file = embedding_pipeline.delete_vectors_for_file
+
+        deleted = asyncio.run(delete_vectors_for_file(file_name))
+        if deleted:
+            print(f"[Celery Worker] Successfully deleted vectors for file: {file_name}")
+        else:
+            print(f"[Celery Worker] Warning: Vector deletion reported false for file: {file_name}")
+
+        return {
+            "status": "deleted",
+            "file_name": file_name,
+            "workspace_id": workspace_id
+        }
+
+    except Exception as exc:
+        print(f"[Celery Worker] Error deleting vectors for document {file_name}: {exc}")
+        raise self.retry(exc=exc, countdown=10)

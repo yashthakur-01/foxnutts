@@ -12,6 +12,8 @@ CREATE TABLE public.users (
 CREATE TABLE public.workspace (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     cust_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    workspace_name TEXT DEFAULT 'Demo Workspace',
+    workspace_url TEXT,
     temperature NUMERIC DEFAULT 0.7,
     model_name TEXT DEFAULT 'llama-3.3-70b-versatile',
     provider TEXT DEFAULT 'groq',

@@ -113,52 +113,18 @@ async def conditional_router_node_1(state: AgentState,config: RunnableConfig):
         llm = llm.with_structured_output(ConditionalRouterOutput, include_raw=True)
 
     
-    system_prompt = SystemMessage(content='''You are an expert query classifier for an enterprise document search & RAG assistant. Analyze the user's latest query along with the conversation history to classify the intent.
+    system_prompt = SystemMessage(content="""You are an intent classifier for an enterprise document search & RAG assistant. Classify the user's latest query:
 
-CRITICAL CLASSIFICATION RULES:
-1. Return 'generic_or_repetitive' ONLY for basic greetings, casual pleasantries, chit-chat, or simple conversational closings (e.g., "hi", "hello", "how are you", "thanks", "bye", "who created you").
-2. Return 'genuine_query' for ANY query that asks about business, domain, policy, structural, process, compensation, salary, technical, or document-related topics (e.g., "whats the monthly salary types", "what is the leave policy", "how is tax calculated", "what are the project milestones"). EVEN IF a query seems broad or general on the surface, it MAY exist in the user's uploaded documents and MUST be classified as 'genuine_query' to retrieve context.
-3. Return 'genuine_query' if the user asks to regenerate, expand, clarify, rephrase, or re-evaluate a previous response.
-4. DEFAULT RULE: If you are in doubt or uncertain whether a question is generic vs document-related, ALWAYS return 'genuine_query'.
+CLASSIFICATION RULES:
+1. 'generic_or_repetitive': Return ONLY for basic greetings, pleasantries, chit-chat, or identity questions.
+   - Examples: "hello", "hi there", "how are you?", "thank you", "bye", "who created you?".
 
-FEW-SHOT EXAMPLES:
+2. 'genuine_query': Return for ANY question about business, policies, procedures, compensation/salary, technical details, or document content, OR requests to expand/rephrase an answer.
+   - Examples: "whats the monthly salary types", "what is the leave policy?", "explain section 3", "regenerate that answer with details".
 
-User: "hello there!"
-Classification: generic_or_repetitive
+3. DEFAULT RULE: If uncertain whether a question is generic vs document-related, ALWAYS choose 'genuine_query' to retrieve document context.
 
-User: "how are you doing today?"
-Classification: generic_or_repetitive
-
-User: "thank you, that was very helpful!"
-Classification: generic_or_repetitive
-
-User: "whats the monthly salary types"
-Classification: genuine_query
-Reason: Question about compensation/salary structures which likely exists in uploaded HR/company documents.
-
-User: "what are the types of salary components?"
-Classification: genuine_query
-Reason: Domain-specific topic requiring document retrieval.
-
-User: "what is the leave policy for new employees?"
-Classification: genuine_query
-Reason: HR policy question requiring context retrieval.
-
-User: "how do I reset my account password?"
-Classification: genuine_query
-Reason: Procedure/help topic requiring context retrieval.
-
-User: "can you regenerate that answer with more details?"
-Classification: genuine_query
-Reason: Request to regenerate response.
-
-User: "explain the key features of product X"
-Classification: genuine_query
-Reason: Product specification topic requiring retrieval.
-
-Output exactly one of:
-generic_or_repetitive
-genuine_query''')
+Output exactly one: 'generic_or_repetitive' or 'genuine_query'.""")
     
     full_messages = [system_prompt] + messages
     
@@ -286,20 +252,22 @@ async def chatbot_node(state: AgentState, config: RunnableConfig):
     retrieved_context = state.get("current_context",None)
     if not retrieved_context:
         retrieved_context = state.get("messages",[{"content": "SYSTEM OBSERVATION: unable to fetch the context"}])[-1].content
-    messages = [SystemMessage(content=f"""
-{system_prompt}
+    messages = [SystemMessage(content=f"""{system_prompt}
 
-CRITICAL INSTRUCTIONS FOR GROUNDED & CONCISE RESPONSES:
-1. **Strict Context Grounding**: Answer the query relying ONLY on the RETRIEVED CONTEXT provided below. Do NOT use outside knowledge, assumptions, or unverified facts.
-2. **Zero Hallucination**: If the answer is not contained within or directly inferable from the context, state clearly and concisely: "I cannot find this information in the provided context." Do NOT invent or extrapolate.
-3. **Concise & Direct**: Keep your response clear, structured (using bullet points where appropriate), and to the point. Avoid conversational filler or repeating the question.
-4. **Partial Information**: If the context only partially answers the query, state what is directly supported by the context and explicitly note what details are missing.
+STRICT CONTEXT GROUNDING & RESPONSE RULES:
+1. Grounding: Answer the query relying ONLY on the RETRIEVED CONTEXT provided below. Do NOT use unverified outside facts or assumptions.
+2. Anti-Hallucination: If the answer is not present in or directly inferable from the context, respond strictly with:
+   "I cannot find this information in the provided context."
+3. Partial Information: If the context partially answers the query, answer what is directly supported and explicitly list the missing details.
+4. Structure: Keep responses clear, professional, and well-structured using bullet points where applicable.
+
+EXAMPLES:
+- Context: "Employee annual leave is 20 days. Health insurance covers full dental."
+  Query: "What is the leave policy?" -> "According to the provided context, annual leave for employees is 20 days."
+  Query: "What is the 401k match?" -> "I cannot find this information in the provided context."
 
 QUERY:
 {state['query'][-1]}
-
-IMPROVEMENT REMARKS (IF ANY):
-{state.get('remarks', "none")}
 
 RETRIEVED CONTEXT:
 {retrieved_context}
@@ -318,16 +286,10 @@ async def generic_response_node(state: AgentState, config: RunnableConfig):
     routes to the end node directly without calling the LLM again
     '''
     
-    system_prompt = SystemMessage(content='''
-                                  You are a history-grounded assistant. Answer only from the conversation history.
-
-                                - If the user's query is generic (e.g., greetings, thanks, casual conversation), respond appropriately using the conversation context.
-
-                                - If the answer already exists in the conversation history, return the relevant answer.
-
-                                - If the answer cannot be found in the conversation history, do not guess, infer, or use external knowledge.Respond that you donot have enough context/information to respond to the query
-
-                                Use the conversation history as the only source of truth.''')
+    system_prompt = SystemMessage(content="""You are a polite, history-grounded assistant.
+- Answer casual greetings, pleasantries, or questions using ONLY conversation history.
+- If a question requires document knowledge not in history, politely inform the user to ask a specific topic question.
+- Keep responses brief, friendly, and direct.""")
     
     model_provider = state["model"]["provider"]
     model_name = state["model"]["model_name"]
@@ -366,38 +328,19 @@ async def response_evaluation_node(state:AgentState, config: RunnableConfig):
         retrieved_context = state.get("messages",[{"content": "SYSTEM OBSERVATION: unable to fetch the context"}])[-1].content
     
     system_prompt = SystemMessage(
-            content=f"""
-        You are a response quality judge. Your job is to evaluate if the Assistant's response adequately answers the User's query.
+            content=f"""Evaluate if the Assistant Response adequately answers the Query using the Context.
 
-        Original Query:
-        {original_query}
+Original Query: {original_query}
+Current Query: {latest_query}
+Context: {retrieved_context}
+Assistant Response: {drafted_response}
+Iteration: {state.get('max_iter', 0) + 1}
 
-        Current Query:
-        {latest_query}
-
-        Context provided to the Assistant:
-        {retrieved_context}
-
-        Assistant Response:
-        {drafted_response}
-
-        Iteration count:
-        {state.get('max_iter',0)+1}
-
-        Return 'satisfactory' if the response directly and sufficiently answers the user's query.
-
-        Return 'query_rephrase - ....' followed by the remark if the query is not answered or partially answered or insufficient context was used to answer the query.
-
-        Return 'revise - ...' followed by the remark if you dont want the context to be regenerated, but want the llm to improve the response on the basis of the context.
-
-        Return 'clarify - ...' followed by the remark if the query is extremely ambiguous and it is impossible to fetch relevant context or answer it without asking the user for more specifics (e.g., they say "what about it?" without clear context).
-
-        Output exactly one of:
-        satisfactory
-        query_rephrase - .... 
-        revise - .... 
-        clarify - .... 
-        """
+Output EXACTLY one option:
+- satisfactory
+- query_rephrase - [remark]
+- revise - [remark]
+- clarify - [remark]"""
         )
     
     provider = state["model"]["provider"]
@@ -431,19 +374,21 @@ async def query_rephraser_node(state:AgentState, config: RunnableConfig):
     query = state["query"][-1]
     remarks = state['remarks']
     system_prompt = SystemMessage(
-            content="""
-        You are a query rewriter.
+            content=f"""You are an expert query rewriter for document retrieval.
 
-        Rewrite the user's latest query into a clear, specific, and self-contained question that preserves the original intent.
+INSTRUCTIONS:
+1. Rewrite the user's latest query into a clear, specific, and self-contained question that preserves original intent.
+2. Use conversation history ONLY to resolve ambiguous pronouns (e.g., "it", "they", "that policy") and missing references.
+3. Do NOT answer the query, add unverified facts, or include explanations. Output ONLY the rewritten query string.
 
-        Use the conversation history only to resolve references, ambiguity, and missing context. Do not change the meaning, add new information, answer the query, or include explanations.
+EXAMPLES:
+- History: "Tell me about the remote work policy." -> User: "Does it apply to contractors?"
+  Rewritten Query: "Does the remote work policy apply to contractors?"
+- History: "What are the salary types?" -> User: "explain the second one"
+  Rewritten Query: "Explain the second type of salary component listed in the document."
 
-        Output only the rewritten query.
-
-        remarks: {remarks}
-        
-        {query}
-        """.format(query=query, remarks=remarks)
+Judge Remarks: {remarks}
+Latest Query: {query}"""
         )    
     provider = state["model"]["provider"]
     model_name = state["model"]["model_name"]
@@ -461,32 +406,35 @@ async def query_rephraser_node(state:AgentState, config: RunnableConfig):
 @observable_node("unsatisfactory_handle_node")
 async def unsatisfactory_handler_node(state: AgentState, config: RunnableConfig):
     """
-    this node is to return the most recent response of the agent with a disclaimer that the max_iteration of the agent has been reached, and the response may not be satisfactory.
+    This node returns the most recent valid AI response with a disclaimer when max iterations is reached.
     """
-    last_response = state["messages"][-1].content
-    disclaimer = "Disclaimer: The maximum number of iterations has been reached. The following response may not be satisfactory.\n\n"
-    response = AIMessage(content=disclaimer + last_response)
-    return {"disclaimer": True,"messages": [response], "node_output": [response]}
+    last_ai_response = ""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, AIMessage) and msg.content and isinstance(msg.content, str) and msg.content.strip():
+            last_ai_response = msg.content.strip()
+            break
+            
+    if not last_ai_response:
+        last_ai_response = "I don't have enough context in the uploaded documents to answer your query accurately."
+
+    disclaimer = "⚠️ Disclaimer: Maximum processing iterations reached. The response below may be incomplete:\n\n"
+    response = AIMessage(content=disclaimer + last_ai_response)
+    return {"disclaimer": True, "messages": [response], "node_output": [response]}
 
 @observable_node("clarify_node")
 async def clarify_node(state: AgentState, config: RunnableConfig):
     """
     This node asks the user for clarification if the query is too ambiguous to answer or retrieve context for.
     """
-    
-    query = state["query"][-1]
+    query = state["query"][-1] if state.get("query") else ""
     remarks = state.get('remarks', 'The query is too vague.')
     system_prompt = SystemMessage(
-            content="""
-        You are a helpful assistant. 
-        The user's query is too ambiguous to answer or search for. 
-        Based on the user's query and the remarks from the response judge, draft a polite response asking the user to clarify their intent or provide more specific details.
+            content=f"""Draft a polite, concise 1-sentence request asking the user to clarify their vague query.
 
-        User Query: {query}
-        Remarks: {remarks}
+Query: {query}
+Remarks: {remarks}
 
-        Output ONLY the polite clarification question that will be shown to the user.
-        """.format(query=query, remarks=remarks)
+Output ONLY the clarification request."""
         )    
     provider = state["model"]["provider"]
     model_name = state["model"]["model_name"]
@@ -499,6 +447,9 @@ async def clarify_node(state: AgentState, config: RunnableConfig):
     await asyncio.sleep(2.5)
     response = await llm.ainvoke(full_messages)
     
+    if not response.content or not isinstance(response.content, str) or not response.content.strip():
+        response = AIMessage(content="Could you please provide more details or clarify your query?")
+        
     return {"messages": [response], "node_output": [response]}
 
 

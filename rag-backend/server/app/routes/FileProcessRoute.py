@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from supabase_client.client import supabase
 import asyncio
 
-from app.tasks import process_document_task, reprocess_document_task
+from app.tasks import process_document_task, reprocess_document_task, delete_document_task
 
 from app.helpers.cache import get_cached_workspace_config
 
@@ -83,4 +83,33 @@ async def reprocess_document(
         return JSONResponse(
             status_code=500,
             content={"message": f"Error occurred while queueing reprocess - {str(e)}", "success": False}
+        )
+
+
+@router.delete("/api/delete-document")
+async def delete_document(
+    body: ProcessDocument
+):
+    """Enqueue document vector deletion from Pinecone index as a Celery background task."""
+    try:
+        task = delete_document_task.delay(
+            file_name=body.fileName,
+            customer_id=body.customer_id,
+            workspace_id=body.workspace_id
+        )
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "Document vector deletion task queued in background",
+                "task_id": task.id,
+                "status": "queued",
+                "success": True
+            }
+        )
+    except Exception as e:
+        print(f"Error queueing document vector deletion for {body.fileName}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Error queueing vector deletion - {str(e)}", "success": False}
         )
