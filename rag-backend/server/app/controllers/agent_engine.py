@@ -82,7 +82,11 @@ class AgentState(TypedDict):
     current_context : str | None
 
     retrived_context: Annotated[list[str], operator.add]
+
+    query_context_pairs: Annotated[list[dict[str, Any]], operator.add]
     
+    query_type: str | None
+
     route: Annotated[list[str],operator.add]
 
 class ConditionalRouterOutput(TypedDict):   
@@ -177,9 +181,22 @@ async def retrieve_context(state:AgentState, config: RunnableConfig):
     customerId = configurable.get("customerId", "")
     tenantId = configurable.get("tenantId", "")  # Retained for analytics/tracing
     workspaceId = configurable.get("workspaceId", "")
+    similarityThreshold = float(configurable.get("similarityThreshold", 0.6))
     
-    context = await fetch_context_from_vector_db(query, customerId, workspaceId)
-    return {"retrived_context": [context],"current_context": context, "node_output": [context]}
+    context = await fetch_context_from_vector_db(query, customerId, workspaceId, similarity_threshold=similarityThreshold)
+    is_context_found = bool(context and context.strip())
+    return {
+        "retrived_context": [context],
+        "current_context": context,
+        "query_context_pairs": [{
+            "query": query,
+            "context_received": context,
+            "context_found": is_context_found,
+            "query_type": "genuine_query"
+        }],
+        "query_type": "genuine_query",
+        "node_output": [context]
+    }
 
 @tool
 async def web_search(state: Annotated[dict, InjectedState]) -> str:
@@ -322,7 +339,17 @@ async def generic_response_node(state: AgentState, config: RunnableConfig):
     await asyncio.sleep(2.5)
     response = await llm_model.ainvoke(full_messages)
     
-    return {"messages": [response], "node_output": [response]}
+    return {
+        "messages": [response],
+        "query_context_pairs": [{
+            "query": state["query"][-1],
+            "context_received": "",
+            "context_found": True,
+            "query_type": "generic_or_repetitive"
+        }],
+        "query_type": "generic_or_repetitive",
+        "node_output": [response]
+    }
     
 @observable_node("evalator_node")   
 async def response_evaluation_node(state:AgentState, config: RunnableConfig):

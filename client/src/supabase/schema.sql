@@ -20,6 +20,7 @@ CREATE TABLE public.workspace (
     search_enabled BOOLEAN DEFAULT false,
     chunk_size INTEGER DEFAULT 1024,
     chunk_overlap INTEGER DEFAULT 250,
+    similarity_threshold NUMERIC DEFAULT 0.6,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
@@ -30,6 +31,8 @@ CREATE TABLE public.messages (
     workspace_id UUID REFERENCES public.workspace(id) ON DELETE CASCADE,
     sender_type TEXT NOT NULL CHECK (sender_type IN ('human', 'ai')),
     content TEXT NOT NULL,
+    rating SMALLINT CHECK (rating IN (1, -1)),
+    feedback_text TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
@@ -44,6 +47,8 @@ CREATE TABLE public.agent_traces (
     total_duration_ms INTEGER DEFAULT 0,
     trajectory JSONB,
     error_messages JSONB,
+    query_context_pairs JSONB DEFAULT '[]'::jsonb,
+    query_type TEXT DEFAULT 'genuine_query',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
@@ -63,6 +68,7 @@ CREATE TABLE public.files (
 CREATE INDEX idx_workspace_cust_id ON public.workspace(cust_id);
 CREATE INDEX idx_messages_session_id ON public.messages(session_id);
 CREATE INDEX idx_messages_workspace_id ON public.messages(workspace_id);
+CREATE INDEX idx_messages_rating ON public.messages(rating);
 CREATE INDEX idx_agent_traces_session_id ON public.agent_traces(session_id);
 CREATE INDEX idx_agent_traces_workspace_id ON public.agent_traces(workspace_id);
 CREATE INDEX idx_files_workspace_id ON public.files(workspace_id);

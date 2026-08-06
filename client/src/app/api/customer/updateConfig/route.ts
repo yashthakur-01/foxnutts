@@ -1,19 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabase from "../../../../supabase/adminClient";
+import { getCachedUser } from "../../../../lib/authCache";
 
 export async function POST(request: NextRequest) {
-    // 1. Authenticate the user
+    // 1. Authenticate the user with session caching
     const authHeader = request.headers.get("Authorization");
-    if (!authHeader) {
-        return NextResponse.json({ message: "Authorization header not found", success: false }, { status: 401 });
-    }
-
-    const { data: customer, error: customerError } = await supabase.auth.getUser(authHeader);
-    if (customerError || !customer?.user) {
+    const { user, error: customerError } = await getCachedUser(authHeader);
+    if (customerError || !user) {
         return NextResponse.json({ message: `Authorization error occurred - ${customerError?.message}`, success: false }, { status: 401 });
     }
 
-    const cust_id = customer.user.id;
+    const cust_id = user.id;
 
     // 2. Parse the configuration data
     const body = await request.json();
@@ -23,8 +20,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ message: "Missing workspace_id", success: false }, { status: 400 });
     }
 
-    // Security best practice: explicitly list the fields the user is allowed to update.
-    // This prevents malicious users from updating things like 'cust_id' or 'id'.
+    // Security best practice: explicitly list allowed fields
     const allowedFields = [
         "chatbot_name", 
         "system_prompt", 
@@ -39,7 +35,6 @@ export async function POST(request: NextRequest) {
         "suggested_questions"
     ];
 
-    // Build the payload dynamically based on what was sent in the request
     const updatePayload: Record<string, any> = {};
     for (const key of Object.keys(configData)) {
         if (allowedFields.includes(key)) {
@@ -48,18 +43,18 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        // 3. Optional: Verify the user actually owns this workspace before updating
+        // 3. Verify workspace ownership
         const { data: workspaceOwner, error: checkError } = await supabase
             .from("workspace")
             .select("cust_id")
-            .eq("id", workspace_id) // Or use 'workspace_url' depending on your primary key
+            .eq("id", workspace_id)
             .single();
 
         if (checkError || workspaceOwner?.cust_id !== cust_id) {
             return NextResponse.json({ message: "Unauthorized or workspace not found", success: false }, { status: 403 });
         }
 
-        // 4. Update the workspace/chatbot configuration dynamically
+        // 4. Update workspace configuration in Supabase
         const { error: updateError } = await supabase
             .from("workspace")
             .update(updatePayload)
@@ -67,6 +62,21 @@ export async function POST(request: NextRequest) {
 
         if (updateError) {
             return NextResponse.json({ message: `Failed to update configuration: ${updateError.message}`, success: false }, { status: 500 });
+        }
+
+        // 5. Invalidate Python FastAPI Redis workspace config cache
+        try {
+            const fastApiUrl = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
+            await fetch(`${fastApiUrl}/api/invalidate-workspace-cache`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-API-Key": process.env.FASTAPI_SECRET_KEY || ""
+                },
+                body: JSON.stringify({ workspace_id })
+            });
+        } catch (cacheErr) {
+            console.error("FastAPI cache invalidation warning:", cacheErr);
         }
 
         return NextResponse.json({ message: "Configuration saved successfully!", success: true }, { status: 200 });

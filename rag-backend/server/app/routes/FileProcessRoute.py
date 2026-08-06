@@ -6,6 +6,8 @@ import asyncio
 
 from app.tasks import process_document_task, reprocess_document_task
 
+from app.helpers.cache import get_cached_workspace_config
+
 class ProcessDocument(BaseModel):
     workspace_id: str
     customer_id: str
@@ -18,14 +20,7 @@ async def process_document(
     body: ProcessDocument
 ):
     try: 
-        response = await asyncio.to_thread(
-            supabase.table("workspace").select("chunk_size, chunk_overlap").eq("id", body.workspace_id).execute
-        )
-        
-        if not response.data:
-            raise Exception(f"Workspace with id {body.workspace_id} not found.")
-            
-        workspace_data = response.data[0]
+        workspace_data = await asyncio.to_thread(get_cached_workspace_config, body.workspace_id)
         chunk_size = workspace_data.get("chunk_size", 1024)
         chunk_overlap = workspace_data.get("chunk_overlap", 250)
 
@@ -61,14 +56,7 @@ async def reprocess_document(
 ):
     """Delete old embeddings from Pinecone and re-embed the document."""
     try:
-        response = await asyncio.to_thread(
-            supabase.table("workspace").select("chunk_size, chunk_overlap").eq("id", body.workspace_id).execute
-        )
-        
-        if not response.data:
-            raise Exception(f"Workspace with id {body.workspace_id} not found.")
-            
-        workspace_data = response.data[0]
+        workspace_data = await asyncio.to_thread(get_cached_workspace_config, body.workspace_id)
         chunk_size = workspace_data.get("chunk_size", 1024)
         chunk_overlap = workspace_data.get("chunk_overlap", 250)
 

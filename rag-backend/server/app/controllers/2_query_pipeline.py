@@ -35,8 +35,18 @@ async def fetch_context_from_vector_db(query: str, customerId: str, workspaceId:
     except Exception as e:
         print(f"Error fetching relevant documents: {e}")
         return ""
-    context = "\n\n".join([doc.page_content for doc in relevant_docs])
     
+    # Filter retrieved docs by Jina reranker relevance score threshold
+    filtered_docs = [
+        doc.page_content for doc in relevant_docs
+        if doc.metadata.get("relevance_score", 1.0) >= similarity_threshold
+    ]
+    
+    if not filtered_docs:
+        print(f"No relevant context found matching threshold {similarity_threshold} for query: {query}")
+        return ""
+
+    context = "\n\n".join(filtered_docs)
     return context
 
 

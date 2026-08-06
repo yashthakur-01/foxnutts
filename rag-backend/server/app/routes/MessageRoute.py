@@ -15,25 +15,28 @@ class MessageRequest(BaseModel):
     session_id: str
     message: str
 
-router = APIRouter()
+from app.helpers.cache import get_cached_workspace_config, invalidate_workspace_cache
+
+class InvalidateCacheRequest(BaseModel):
+    workspace_id: str
+
+@router.post("/api/invalidate-workspace-cache")
+async def handle_invalidate_cache(body: InvalidateCacheRequest):
+    success = invalidate_workspace_cache(body.workspace_id)
+    return JSONResponse(status_code=200, content={"success": success, "message": "Cache invalidated"})
 
 @router.post("/api/chat")
 async def return_message(body: MessageRequest):
     try:
-        # 1. Fetch AI config from Supabase
-        result = await asyncio.to_thread(
-            lambda: supabase.table("workspace").select("temperature, model_name, provider, system_prompt, search_enabled").eq("id", body.workspace_id).execute()
-        )
-        if not result.data:
-            raise Exception(f"Workspace with id {body.workspace_id} not found.")
-        
-        workspace_data = result.data[0]
+        # 1. Fetch AI config from Redis cache (fallback to Supabase)
+        workspace_data = await asyncio.to_thread(get_cached_workspace_config, body.workspace_id)
 
         temperature = workspace_data.get("temperature", 0.7)
         model_name = workspace_data.get("model_name", "gpt-4o")
         provider = workspace_data.get("provider", "openai")
         system_prompt = workspace_data.get("system_prompt", "You are a helpful assistant.")
         search_enabled = workspace_data.get("search_enabled", False)
+        similarity_threshold = float(workspace_data.get("similarity_threshold", 0.6))
         
         # 2. Get the compiled LangGraph agent
         agent = get_chatbot_agent()
@@ -42,7 +45,8 @@ async def return_message(body: MessageRequest):
         config = {
             "configurable": {
                 "customerId": body.customer_id,
-                "workspaceId": body.workspace_id
+                "workspaceId": body.workspace_id,
+                "similarityThreshold": similarity_threshold
             }
         }
         
@@ -77,7 +81,8 @@ async def return_message(body: MessageRequest):
                 "temperature": temperature,
                 "max_tokens": 512
             },
-            "search_enabled": search_enabled
+            "search_enabled": search_enabled,
+            "query_context_pairs": []
         }
         
         print(f"Invoking LangGraph Agent for message: {body.message}")
@@ -87,6 +92,8 @@ async def return_message(body: MessageRequest):
             full_response = ""
             trajectory = []
             error_messages = []
+            query_context_pairs = []
+            query_type = "genuine_query"
             # Only stream tokens from nodes that produce user-facing answers.
             # All other nodes (router, evaluator, rephraser) are internal and must be silent.
             STREAMABLE_NODES = {"chatbot_node", "generic_response_node", "clarify_node"}
@@ -118,6 +125,13 @@ async def return_message(body: MessageRequest):
                             trajectory = output["trajectory"]
                             if "error_messages" in output:
                                 error_messages = output["error_messages"]
+                            if "query_context_pairs" in output:
+                                query_context_pairs = output["query_context_pairs"]
+                            if "query_type" in output:
+                                query_type = output["query_type"]
+                            elif "route" in output and isinstance(output["route"], list) and len(output["route"]) > 0:
+                                if output["route"][0] == "generic_or_repetitive":
+                                    query_type = "generic_or_repetitive"
                             
                 # Calculate metrics
                 total_tokens = 0
@@ -142,6 +156,7 @@ async def return_message(body: MessageRequest):
 
                 clean_trajectory = serialize_item(trajectory)
                 clean_error_messages = serialize_item(error_messages)
+                clean_query_context_pairs = serialize_item(query_context_pairs)
 
                 try:
                     # Insert message
@@ -164,7 +179,9 @@ async def return_message(body: MessageRequest):
                             "total_tokens": total_tokens,
                             "total_duration_ms": total_duration_ms,
                             "trajectory": clean_trajectory,
-                            "error_messages": clean_error_messages
+                            "error_messages": clean_error_messages,
+                            "query_context_pairs": clean_query_context_pairs,
+                            "query_type": query_type
                         }).execute()
                     )
                     print("Agent responded and traces saved successfully.")

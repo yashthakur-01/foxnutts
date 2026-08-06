@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabase from "../../../../supabase/adminClient";
+import { getCachedUser } from "../../../../lib/authCache";
 
 export async function POST(request: NextRequest){
 
     const body = await request.json();
-
     const authHeader = request.headers.get("Authorization");
 
-    if(!authHeader){
-        return NextResponse.json({message: "Authorization header not found", success:false},{status:400})
+    const { user, error: customerError } = await getCachedUser(authHeader);
+    if (customerError || !user) {
+        return NextResponse.json({ message: `Authorization error occurred - ${customerError?.message}`, success: false }, { status: 401 });
     }
 
-    const {data: customer, error: customerError} = await supabase.auth.getUser(authHeader)
-
-    if(customerError){
-        return NextResponse.json({message: `Authorization error occured - ${customerError.message}`,success: false},{status:500})
-    }
-
-    const cust_id = customer.user.id;
+    const cust_id = user.id;
 
     if(!body.workspace_name || !body.workspace_url){
         return NextResponse.json({message: "missing workspace name or workspace url", success:false}, {status: 400});

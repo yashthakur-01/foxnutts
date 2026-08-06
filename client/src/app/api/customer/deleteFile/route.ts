@@ -1,21 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabase from "../../../../supabase/adminClient";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
-import {r2} from "../../../../cloudflare/client";
+import { r2 } from "../../../../cloudflare/client";
+import { getCachedUser } from "../../../../lib/authCache";
 
-export async function DELETE(request: NextRequest){
-    
+export async function DELETE(request: NextRequest) {
     const authHeader = request.headers.get("Authorization");
-    if (!authHeader) {
-        return NextResponse.json({ message: "Authorization header not found", success: false }, { status: 401 });
-    }
-
-    const { data: customer, error: customerError } = await supabase.auth.getUser(authHeader);
-    if (customerError || !customer?.user) {
+    const { user, error: customerError } = await getCachedUser(authHeader);
+    if (customerError || !user) {
         return NextResponse.json({ message: `Authorization error occurred - ${customerError?.message}`, success: false }, { status: 401 });
     }
 
-    const cust_id = customer.user.id;
+    const cust_id = user.id;
     
     const body = await request.json();
     const {file_id, workspace_id} = body;

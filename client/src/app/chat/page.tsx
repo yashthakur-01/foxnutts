@@ -3,12 +3,14 @@
 import { useEffect, useState, useRef } from "react";
 import { createClient } from "../../supabase/browserClient";
 import { useRouter } from "next/navigation";
+import ObservabilitySection from "../../components/ObservabilitySection";
 
 export default function ChatDashboard() {
   const supabase = createClient();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [activeMainTab, setActiveMainTab] = useState<"chat" | "observability">("chat");
   
   // File Upload State
   const [file, setFile] = useState<File | null>(null);
@@ -354,6 +356,17 @@ export default function ChatDashboard() {
   };
 
   const handleLogout = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await fetch("/api/customer/logout", {
+          method: "POST",
+          headers: { "Authorization": session.access_token }
+        });
+      }
+    } catch (err) {
+      console.error("Logout cache clearance error:", err);
+    }
     await supabase.auth.signOut();
     router.push("/login");
   };
@@ -364,143 +377,179 @@ export default function ChatDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-950 p-8">
-      <div className="max-w-6xl mx-auto flex gap-8">
+      <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Left Column: Upload */}
-        <div className="w-1/3 space-y-6">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-white">Data Ingestion</h2>
-              <button onClick={handleLogout} className="text-sm text-red-400 hover:text-red-300">Logout</button>
-            </div>
-            
-            <div className="space-y-4">
-              <input
-                type="file"
-                accept=".pdf,.txt,.md"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
-              />
-              <button
-                onClick={handleFileUpload}
-                disabled={!file || isUploading}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {isUploading ? "Uploading & Processing..." : "Upload Document"}
-              </button>
-
-              {isUploading && (
-                <div className="w-full bg-gray-950 rounded-full h-3 overflow-hidden border border-gray-800 p-0.5">
-                  <div
-                    className="bg-blue-500 h-full rounded-full transition-all duration-200"
-                    style={{ width: `${uploadProgress}%` }}
-                  ></div>
-                </div>
-              )}
-
-              {uploadStatus && (
-                <div className="text-sm text-gray-300 bg-gray-800/50 p-3 rounded border border-gray-700 break-words">
-                  {uploadStatus}
-                </div>
-              )}
-            </div>
+        {/* Main Navigation Header */}
+        <div className="flex justify-between items-center bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <div className="flex gap-3">
+            <button
+              onClick={() => setActiveMainTab("chat")}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                activeMainTab === "chat"
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-800 text-gray-400 hover:text-white"
+              }`}
+            >
+              💬 Chatbot & Ingestion
+            </button>
+            <button
+              onClick={() => setActiveMainTab("observability")}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                activeMainTab === "observability"
+                  ? "bg-purple-600 text-white"
+                  : "bg-gray-800 text-gray-400 hover:text-white"
+              }`}
+            >
+              📊 Observability Analytics
+            </button>
           </div>
 
-          {/* Uploaded Files List */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <h3 className="text-lg font-semibold text-white mb-4">Uploaded Files</h3>
-            {workspaceFiles.length === 0 ? (
-              <p className="text-sm text-gray-500">No files uploaded yet.</p>
-            ) : (
-              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                {workspaceFiles.map((f) => (
-                  <div
-                    key={f.file_id}
-                    className="flex items-center justify-between gap-2 p-3 rounded-lg bg-gray-800/50 border border-gray-700"
+          <button onClick={handleLogout} className="text-sm text-red-400 hover:text-red-300 font-medium px-3.5 py-1.5 rounded-lg bg-gray-950 border border-gray-800">
+            Logout
+          </button>
+        </div>
+
+        {/* Observability Section */}
+        {activeMainTab === "observability" && workspaceId ? (
+          <ObservabilitySection workspaceId={workspaceId} />
+        ) : (
+          <div className="flex gap-8">
+            {/* Left Column: Upload */}
+            <div className="w-1/3 space-y-6">
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-xl font-bold text-white">Data Ingestion</h2>
+                </div>
+                
+                <div className="space-y-4">
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                    className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                  />
+                  <button
+                    onClick={handleFileUpload}
+                    disabled={!file || isUploading}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
                   >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-200 truncate" title={f.file_name}>
-                        {f.file_name}
-                      </p>
-                      <span
-                        className={`text-xs font-medium ${
-                          f.status === "completed"
-                            ? "text-green-400"
-                            : f.status === "failed"
-                            ? "text-red-400"
-                            : "text-yellow-400"
-                        }`}
-                      >
-                        {f.status === "completed" ? "✅ Completed" : f.status === "failed" ? "❌ Failed" : "⏳ Processing"}
-                      </span>
+                    {isUploading ? "Uploading & Processing..." : "Upload Document"}
+                  </button>
+
+                  {isUploading && (
+                    <div className="w-full bg-gray-950 rounded-full h-3 overflow-hidden border border-gray-800 p-0.5">
+                      <div
+                        className="bg-blue-500 h-full rounded-full transition-all duration-200"
+                        style={{ width: `${uploadProgress}%` }}
+                      ></div>
                     </div>
+                  )}
 
-                    {f.status === "failed" && (
-                      <button
-                        onClick={() => handleReprocess(f.file_id)}
-                        disabled={reprocessingFileId === f.file_id}
-                        className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
-                      >
-                        {reprocessingFileId === f.file_id ? "Reprocessing..." : "Reprocess"}
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="text-xs text-gray-500">
-            Workspace ID: <br/><code className="text-blue-400">{workspaceId}</code>
-          </div>
-        </div>
-
-        {/* Right Column: Chat */}
-        <div className="w-2/3 bg-gray-900 border border-gray-800 rounded-xl flex flex-col h-[80vh]">
-          <div className="p-4 border-b border-gray-800">
-            <h2 className="text-xl font-bold text-white">Test RAG Chatbot</h2>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-500">
-                Upload a document on the left, then ask a question here!
-              </div>
-            ) : (
-              messages.map((msg, idx) => (
-                <div key={idx} className={`flex ${msg.role === "human" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-xl p-4 ${
-                    msg.role === "human" 
-                      ? "bg-blue-600 text-white" 
-                      : "bg-gray-800 text-gray-200 border border-gray-700"
-                  }`}>
-                    {msg.content}
-                  </div>
+                  {uploadStatus && (
+                    <div className="text-sm text-gray-300 bg-gray-800/50 p-3 rounded border border-gray-700 break-words">
+                      {uploadStatus}
+                    </div>
+                  )}
                 </div>
-              ))
-            )}
-          </div>
+              </div>
 
-          <form onSubmit={handleChat} className="p-4 border-t border-gray-800">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                placeholder="Ask about your documents..."
-                className="flex-1 bg-gray-950 border border-gray-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-blue-500"
-                disabled={isChatting}
-              />
-              <button
-                type="submit"
-                disabled={isChatting || !inputValue.trim()}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-3 rounded-lg disabled:opacity-50"
-              >
-                Send
-              </button>
+              {/* Uploaded Files List */}
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h3 className="text-lg font-semibold text-white mb-4">Uploaded Files</h3>
+                {workspaceFiles.length === 0 ? (
+                  <p className="text-sm text-gray-500">No files uploaded yet.</p>
+                ) : (
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {workspaceFiles.map((f) => (
+                      <div
+                        key={f.file_id}
+                        className="flex items-center justify-between gap-2 p-3 rounded-lg bg-gray-800/50 border border-gray-700"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-200 truncate" title={f.file_name}>
+                            {f.file_name}
+                          </p>
+                          <span
+                            className={`text-xs font-medium ${
+                              f.status === "completed"
+                                ? "text-green-400"
+                                : f.status === "failed"
+                                ? "text-red-400"
+                                : "text-yellow-400"
+                            }`}
+                          >
+                            {f.status === "completed" ? "✅ Completed" : f.status === "failed" ? "❌ Failed" : "⏳ Processing"}
+                          </span>
+                        </div>
+
+                        {f.status === "failed" && (
+                          <button
+                            onClick={() => handleReprocess(f.file_id)}
+                            disabled={reprocessingFileId === f.file_id}
+                            className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {reprocessingFileId === f.file_id ? "Reprocessing..." : "Reprocess"}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="text-xs text-gray-500">
+                Workspace ID: <br/><code className="text-blue-400">{workspaceId}</code>
+              </div>
             </div>
-          </form>
-        </div>
+
+            {/* Right Column: Chat */}
+            <div className="w-2/3 bg-gray-900 border border-gray-800 rounded-xl flex flex-col h-[80vh]">
+              <div className="p-4 border-b border-gray-800">
+                <h2 className="text-xl font-bold text-white">Test RAG Chatbot</h2>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-gray-500">
+                    Upload a document on the left, then ask a question here!
+                  </div>
+                ) : (
+                  messages.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === "human" ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[80%] rounded-xl p-4 ${
+                        msg.role === "human" 
+                          ? "bg-blue-600 text-white" 
+                          : "bg-gray-800 text-gray-200 border border-gray-700"
+                      }`}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <form onSubmit={handleChat} className="p-4 border-t border-gray-800">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder="Ask about your documents..."
+                    className="flex-1 bg-gray-950 border border-gray-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-blue-500"
+                    disabled={isChatting}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isChatting || !inputValue.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-3 rounded-lg disabled:opacity-50"
+                  >
+                    Send
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
