@@ -23,6 +23,7 @@ CREATE TABLE public.workspace (
     chunk_size INTEGER DEFAULT 1024,
     chunk_overlap INTEGER DEFAULT 250,
     similarity_threshold NUMERIC DEFAULT 0.6,
+    allowed_domains TEXT DEFAULT '*',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 

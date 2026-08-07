@@ -35,7 +35,8 @@ export async function POST(request: NextRequest) {
         "top_k",
         "similarity_threshold",
         "welcome_message",
-        "suggested_questions"
+        "suggested_questions",
+        "allowed_domains"
     ];
 
     const updatePayload: Record<string, any> = {};

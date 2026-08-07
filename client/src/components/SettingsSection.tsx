@@ -31,6 +31,11 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
   const [chunkSize, setChunkSize] = useState(1024);
   const [chunkOverlap, setChunkOverlap] = useState(250);
   const [searchEnabled, setSearchEnabled] = useState(false);
+  const [allowedDomains, setAllowedDomains] = useState("*");
+
+  // Embed Widget Customization State
+  const [widgetPosition, setWidgetPosition] = useState<"bottom-right" | "bottom-left">("bottom-right");
+  const [copiedSnippet, setCopiedSnippet] = useState(false);
 
   // Workspaces List State
   const [userWorkspaces, setUserWorkspaces] = useState<WorkspaceItem[]>([]);
@@ -83,6 +88,7 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
           setChunkSize(Number(config.chunk_size ?? 1024));
           setChunkOverlap(Number(config.chunk_overlap ?? 250));
           setSearchEnabled(Boolean(config.search_enabled));
+          setAllowedDomains(config.allowed_domains || "*");
         }
       }
     } catch (err) {
@@ -118,7 +124,8 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
           similarity_threshold: similarityThreshold,
           chunk_size: chunkSize,
           chunk_overlap: chunkOverlap,
-          search_enabled: searchEnabled
+          search_enabled: searchEnabled,
+          allowed_domains: allowedDomains
         })
       });
 
@@ -127,7 +134,7 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
         throw new Error(data.message || "Failed to update configuration");
       }
 
-      setSaveStatus({ message: "Settings saved successfully! Redis workspace cache purged.", type: "success" });
+      setSaveStatus({ message: "Settings & security policies saved successfully!", type: "success" });
       fetchWorkspacesAndConfig();
     } catch (err: any) {
       console.error("Save config error:", err);
@@ -173,7 +180,6 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
       setNewWsName("");
       setNewWsUrl("");
 
-      // Switch to the newly created workspace
       const newWs = data.workspace?.[0] || data.workspace;
       if (newWs?.id) {
         onWorkspaceChange(newWs.id);
@@ -188,6 +194,21 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
     }
   };
 
+  // Construct Embed Snippet
+  const appOrigin = typeof window !== "undefined" ? window.location.origin : "https://yourdomain.com";
+  const embedSnippetCode = `<script 
+  src="${appOrigin}/widget.v1.js" 
+  data-workspace-id="${workspaceId}"
+  data-position="${widgetPosition}"
+  async
+></script>`;
+
+  const handleCopySnippet = () => {
+    navigator.clipboard.writeText(embedSnippetCode);
+    setCopiedSnippet(true);
+    setTimeout(() => setCopiedSnippet(false), 2500);
+  };
+
   if (loading) {
     return <div className="p-8 text-center text-gray-400">Loading workspace settings...</div>;
   }
@@ -199,7 +220,7 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-white">Active Workspace</h2>
-          <p className="text-sm text-gray-400">Manage LLM parameters, threshold limits, and switch workspaces</p>
+          <p className="text-sm text-gray-400">Manage LLM parameters, threshold limits, and embed widget settings</p>
         </div>
 
         <div className="flex items-center gap-3 w-full md:w-auto">
@@ -299,7 +320,7 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
             <p className="text-xs text-gray-500 mt-1">Lower values are more precise; higher values are more creative.</p>
           </div>
 
-          {/* Relevance / Similarity Threshold Setting */}
+          {/* Context Relevance Threshold Setting */}
           <div className="bg-blue-950/40 border border-blue-800/60 p-4 rounded-xl space-y-2">
             <div className="flex justify-between items-center">
               <label className="text-sm font-semibold text-blue-300">
@@ -324,22 +345,39 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
           </div>
         </div>
 
-        {/* Right Column: Prompt & Chunking Parameters */}
+        {/* Right Column: Prompt & Allowed Domains */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5 flex flex-col justify-between">
           <div className="space-y-5">
             <h3 className="text-lg font-semibold text-white border-b border-gray-800 pb-3">
-              📝 Prompt System & Ingestion
+              📝 System Prompt & Security
             </h3>
 
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">System Prompt</label>
               <textarea
-                rows={5}
+                rows={4}
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg p-3 text-sm focus:border-blue-500 focus:outline-none resize-none font-mono"
                 placeholder="You are a helpful assistant..."
               />
+            </div>
+
+            {/* Allowed Domains Security Field */}
+            <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-xl space-y-2">
+              <label className="block text-sm font-semibold text-slate-200">
+                🛡️ Allowed Embedding Domains (Security Whitelist)
+              </label>
+              <input
+                type="text"
+                value={allowedDomains}
+                onChange={(e) => setAllowedDomains(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg p-2.5 text-sm focus:border-blue-500 focus:outline-none font-mono"
+                placeholder="e.g. example.com, myshop.com (or * for all)"
+              />
+              <p className="text-xs text-slate-400">
+                Comma-separated host domains authorized to embed this widget. Use <code className="text-blue-400 font-mono">*</code> to allow any domain during development.
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -382,13 +420,66 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
             <button
               type="submit"
               disabled={saving}
-              className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50"
+              className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
             >
               {saving ? "Saving Configuration..." : "💾 Save Workspace Settings"}
             </button>
           </div>
         </div>
       </form>
+
+      {/* Website Integration & Embed Snippet Generator Card */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-gray-800 pb-3">
+          <div>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <span>🔌</span> Website Embed Widget Snippet
+            </h3>
+            <p className="text-xs text-gray-400">
+              Copy & paste this script snippet before the <code className="text-blue-400 font-mono">&lt;/body&gt;</code> tag on any website to embed your AI assistant.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-400">Widget Position:</label>
+            <select
+              value={widgetPosition}
+              onChange={(e) => setWidgetPosition(e.target.value as any)}
+              className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="bottom-right">Bottom Right</option>
+              <option value="bottom-left">Bottom Left</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Code Box with Copy Button */}
+        <div className="relative bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 overflow-x-auto">
+          <pre>{embedSnippetCode}</pre>
+          
+          <button
+            onClick={handleCopySnippet}
+            className="absolute top-3 right-3 bg-blue-600 hover:bg-blue-700 text-white font-sans text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 shadow-md cursor-pointer"
+          >
+            {copiedSnippet ? (
+              <>
+                <span>✓</span> Copied!
+              </>
+            ) : (
+              <>
+                <span>📋</span> Copy Snippet
+              </>
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-950/50 p-3 rounded-lg border border-slate-800/80">
+          <span>💡</span>
+          <span>
+            The script runs asynchronously (<code className="text-blue-400">async</code>) without slowing down host website rendering. It loads the widget UI isolated inside an iframe.
+          </span>
+        </div>
+      </div>
 
       {/* Modal: Create Workspace */}
       {showCreateModal && (
@@ -398,7 +489,7 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
               <h3 className="text-lg font-bold text-white">Create New Workspace</h3>
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="text-gray-400 hover:text-white text-lg font-bold"
+                className="text-gray-400 hover:text-white text-lg font-bold cursor-pointer"
               >
                 ✕
               </button>
@@ -439,14 +530,14 @@ export default function SettingsSection({ workspaceId, onWorkspaceChange }: Sett
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 text-sm text-gray-400 hover:text-white bg-gray-800 rounded-lg"
+                  className="px-4 py-2 text-sm text-gray-400 hover:text-white bg-gray-800 rounded-lg cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={creatingWs}
-                  className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold disabled:opacity-50"
+                  className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   {creatingWs ? "Creating..." : "Create Workspace"}
                 </button>
